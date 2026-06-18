@@ -4,14 +4,14 @@ Audit-first AgentScope 2 style planner MVP with a decoupled backend and frontend
 
 ## What This MVP Does
 
-- Runs a deterministic, auditable planner inspired by AgentScope 2 event, permission, workspace, and session concepts.
+- Runs an auditable planner on top of a real AgentScope 2 Agent/Toolkit runtime when provider credentials are configured.
 - Streams planner events over SSE.
 - Persists every run under `data/runs/{run_id}`.
 - Generates an `audit.md` report for every run.
 - Serves a static frontend from `frontend/` that talks to the backend API.
-- Uses the real `agentscope==2.0.1` package for AS2 primitive detection, `UserMsg` snapshots, and event type mapping.
+- Uses the real `agentscope==2.0.1` package for Agent, ReAct loop, Toolkit, permission context, `UserMsg` snapshots, and event type mapping.
 
-The current implementation is AS2-backed at the runtime boundary and keeps model-backed agent execution optional. When provider credentials are configured, `backend/openclaw/as2_adapter.py` is the place to replace the deterministic local planner with a real AS2 `Agent` or `AgentService`.
+The current implementation embeds the complete usable AgentScope 2 runtime path inside the OpenClaw backend: `Agent + OpenAIChatModel + Toolkit + AgentState + permission context + streamed AS2 events`. The official `agentscope.app` FastAPI service layer is detected as optional infrastructure; this repo keeps the public API as a lightweight stdlib REST/SSE service so the frontend stays decoupled and the MVP remains easy to run.
 
 ## Install
 
@@ -71,6 +71,7 @@ Do not commit API keys. The backend records only provider readiness, base URL, a
 ## API
 
 - `GET /api/health`
+- `GET /api/as2/architecture`
 - `POST /api/runs`
 - `GET /api/runs`
 - `GET /api/runs/{run_id}`
@@ -99,6 +100,7 @@ curl -s http://127.0.0.1:8787/api/runs \
 ```text
 backend/openclaw/
   as2_adapter.py
+  as2_runtime.py
   audit.py
   models.py
   permissions.py
@@ -126,9 +128,21 @@ tests/
 .venv/bin/python -m unittest discover -s tests
 ```
 
+## AgentScope 2 Architecture
+
+OpenClaw maps AS2 concepts to local modules as follows:
+
+- AS2 Agent/ReAct runtime: `backend/openclaw/as2_runtime.py`
+- AS2 Toolkit tools: `openclaw_audit_schema`, `openclaw_workspace_inventory`, `openclaw_permission_probe`, `openclaw_score_candidate`
+- AS2 session/workspace state: `build_as2_agent_state()`
+- AS2 event bridge: local events carry `as2_event_type` and AS2 model events are persisted as `as2_model_event`
+- OpenClaw control plane: `planner.py`, `permissions.py`, `storage.py`, and `audit.py`
+
+The model-backed AS2 path proposes candidate steps, but OpenClaw still owns permission enforcement and audit persistence. If no provider key is configured or AS2 model execution fails, the planner falls back to deterministic local candidates and still writes a complete audit trail.
+
 ## Next Steps
 
-- Promote the optional OpenAI-backed AS2 planner from candidate generation into a full AgentScope 2 agent/team service with real tools.
+- Add optional `agentscope.app` FastAPI/Redis service deployment for multi-session production hosting.
 - Add user authentication and tenant-scoped storage.
 - Persist approval rules and human confirmation events.
 - Add real workspace tool execution in Docker/E2B rather than MVP simulation.

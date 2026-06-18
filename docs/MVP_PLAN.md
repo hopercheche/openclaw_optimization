@@ -54,8 +54,9 @@ Planner methods to incorporate:
 
 ### AgentScope 2 Runtime Layer
 
-- Keep the runtime behind an interface so an AS2 agent service can replace the local deterministic planner.
+- Keep the runtime behind an interface so an AS2 app service can later replace the lightweight stdlib REST/SSE service.
 - Include an `as2_adapter` module that imports the real `agentscope` package, reports capability status, maps local events to AS2 event types, and builds AS2 `UserMsg` snapshots.
+- Include an `as2_runtime` module that builds a real AS2 `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, permission context, and ReAct loop when model credentials are configured.
 - Preserve AS2-compatible concepts in data models: event type, session/run id, workspace id, permission decision, tool call/result, and audit report.
 
 ## Backend Architecture
@@ -70,6 +71,7 @@ backend/
     storage.py         # JSON/JSONL file store
     permissions.py     # allow/ask/deny decision engine
     as2_adapter.py     # optional AgentScope integration boundary
+    as2_runtime.py     # real AgentScope Agent/Toolkit runtime
 ```
 
 Runtime flow:
@@ -102,7 +104,7 @@ For MVP, the planner is deterministic and auditable:
    - emit `critique`
 6. Emit final recommendation and audit report.
 
-This gives us a testable planner before plugging in a real LLM/AS2 ReAct agent.
+This gives us a testable planner with a real LLM/AS2 ReAct agent path and a deterministic fallback.
 
 ## Acceptance Criteria
 
@@ -126,5 +128,6 @@ This gives us a testable planner before plugging in a real LLM/AS2 ReAct agent.
 
 - Current machine has Python 3.13 but no Node/npm.
 - `agentscope==2.0.1` is installed in `.venv`.
-- The first version is an AS2-backed audit runtime and planner scaffold.
-- When `DEEPSEEK_API_KEY` or another OpenAI-compatible key is present, the planner asks a real AS2 `Agent` backed by `OpenAIChatModel` to generate candidate steps, then keeps local permission/audit enforcement in control.
+- The first version is an embedded AS2 Agent/Toolkit audit runtime, not the optional `agentscope.app` FastAPI service.
+- The optional `agentscope.app` service layer needs extra app-server dependencies such as FastAPI, Redis transport/storage, and scheduler support; the MVP exposes a stdlib REST/SSE API instead.
+- When `DEEPSEEK_API_KEY` or another OpenAI-compatible key is present, the planner asks a real AS2 `Agent` backed by `OpenAIChatModel` and an OpenClaw Toolkit to generate candidate steps, then keeps local permission/audit enforcement in control.
