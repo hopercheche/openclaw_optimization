@@ -20,6 +20,7 @@ from openclaw.as2_runtime import describe_as2_architecture
 from openclaw.models import RunState, new_run_id
 from openclaw.permissions import PermissionEngine
 from openclaw.planner import LocalAuditPlanner, PlannerThread
+from openclaw.search_planner import SUPPORTED_PLANNER_STRATEGIES, normalize_planner_strategy
 from openclaw.storage import RunStorage
 
 
@@ -48,12 +49,22 @@ class RunManager:
         self.as2_status = detect_as2()
         self.permission_engine = PermissionEngine()
 
-    def create_run(self, goal: str, permission_mode: str, workspace_path: str | None = None) -> RunState:
+    def create_run(
+        self,
+        goal: str,
+        permission_mode: str,
+        workspace_path: str | None = None,
+        planner_strategy: str | None = None,
+    ) -> RunState:
+        strategy = normalize_planner_strategy(
+            planner_strategy or os.environ.get("OPENCLAW_PLANNER_STRATEGY"),
+        )
         state = RunState(
             run_id=new_run_id(),
             goal=goal.strip(),
             permission_mode=permission_mode.upper(),
             workspace_path=str(Path(workspace_path).expanduser().resolve()) if workspace_path else str(DEFAULT_WORKSPACE),
+            planner_strategy=strategy,
             as2_available=self.as2_status.available,
         )
         self.storage.create_run(state)
@@ -62,6 +73,7 @@ class RunManager:
             permission_engine=self.permission_engine,
             as2_status=self.as2_status,
             event_sink=lambda _event: self.broker.notify(),
+            planner_strategy=strategy,
         )
         PlannerThread(planner, state).start()
         return state
@@ -136,7 +148,14 @@ class OpenClawHandler(BaseHTTPRequestHandler):
             return
 
         workspace_path = payload.get("workspace_path")
-        state = MANAGER.create_run(goal, permission_mode, workspace_path)
+        planner_strategy = None
+        if "planner_strategy" in payload:
+            planner_strategy = str(payload.get("planner_strategy", "")).strip().lower()
+            if planner_strategy not in SUPPORTED_PLANNER_STRATEGIES:
+                self._send_json({"error": "invalid_planner_strategy"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+        state = MANAGER.create_run(goal, permission_mode, workspace_path, planner_strategy)
         self._send_json({"run": state.to_dict()}, status=HTTPStatus.CREATED)
 
     def _handle_run_get(self, path: str, query: dict[str, list[str]]) -> None:

@@ -37,13 +37,13 @@ class RunStorage:
         path = self.run_dir(run_id) / "state.json"
         if not path.exists():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = self._normalize_state_payload(json.loads(path.read_text(encoding="utf-8")))
         return RunState(**payload)
 
     def list_states(self) -> list[RunState]:
         states: list[RunState] = []
         for state_path in sorted(self.runs_root.glob("*/state.json"), reverse=True):
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            payload = self._normalize_state_payload(json.loads(state_path.read_text(encoding="utf-8")))
             states.append(RunState(**payload))
         return states
 
@@ -86,3 +86,6 @@ class RunStorage:
         for state in states:
             state.event_count = len(self.load_events(state.run_id))
 
+    def _normalize_state_payload(self, payload: dict) -> dict:
+        payload.setdefault("planner_strategy", "greedy_topk")
+        return payload

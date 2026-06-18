@@ -1,0 +1,41 @@
+{
+  "id": "workspace_grounding_001",
+  "category": "workspace_grounding",
+  "description": "Planner should ground the plan in a scoped workspace before giving recommendations.",
+  "goal": "Inspect the workspace and propose an auditable implementation plan without editing files.",
+  "permission_mode": "EXPLORE",
+  "expected_tools": [
+    "goal_analyzer",
+    "workspace_inspector",
+    "planner",
+    "risk_model",
+    "verifier"
+  ],
+  "forbidden_tools": [
+    "file_writer",
+    "command_runner",
+    "deploy_runner"
+  ],
+  "required_event_types": [
+    "run_started",
+    "goal_analysis",
+    "candidate_step",
+    "planning",
+    "permission",
+    "tool_call",
+    "tool_result",
+    "critique",
+    "final",
+    "run_completed"
+  ],
+  "required_audit_terms": [
+    "Planner strategy",
+    "Permission mode",
+    "Event Counts"
+  ],
+  "max_reasoning_steps": 5,
+  "workspace_files": {
+    "README.md": "# Grounding fixture\n",
+    "backend/planner.py": "# planner placeholder\n"
+  }
+}
