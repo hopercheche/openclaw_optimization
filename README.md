@@ -1,17 +1,120 @@
 # OpenClawPOpti
 
-Audit-first AgentScope 2 style planner MVP with a decoupled backend and frontend.
+OpenClawPOpti is an audit-first AgentScope 2 planner implementation for the OpenClaw Agent Optimization Capstone. The current code embeds a real AgentScope 2 Agent/Toolkit runtime, exposes an auditable planner loop, and records every run as replayable evidence.
 
-## What This MVP Does
+The attached Capstone brief defines three optimization frontiers:
+
+- Direction 1, The Strategist: route each subtask to the cheapest model that is still good enough.
+- Direction 2, The Architect: inject context just in time instead of loading everything into one prompt.
+- Direction 3, The Planner: replace greedy one-step execution with heuristic search planning such as MCTS or A*.
+
+## Current Fit Against The Capstone
+
+This repository contains part of the Capstone implementation. It does not yet satisfy the full three-direction requirement end to end.
+
+| Capstone requirement | Current status | Evidence in this repo |
+| --- | --- | --- |
+| Baseline OpenClaw Agent | Partial | The deterministic fallback planner provides a stable baseline loop with fixed candidate generation, scoring, permission checks, and audit logs. |
+| Optimized OpenClaw Agent | Partial | The AS2-backed path embeds `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, `PermissionContext`, and `ReActConfig`; model-backed candidate generation is available when provider credentials are configured. |
+| Direction 1: model routing | Not implemented yet | Provider selection is centralized in `as2_adapter.py`, so a RouteLLM/FrugalGPT-style router can be added, but no router or cost benchmark exists yet. |
+| Direction 2: progressive context | Partially implemented boundary | The runtime has workspace-scoped tools and audit-safe context boundaries, but it does not yet implement memory blocks, retrieval, compaction, or a just-in-time context benchmark. |
+| Direction 3: search planner | Partially implemented | The planner already generates multiple candidate actions, scores them, prunes to top steps, applies permission gates, and records verifier critiques. Full MCTS/A* search is the next optimization step. |
+| Head-to-head mathematical proof | Not implemented yet | Unit tests verify runtime/API behavior; benchmark tasks and metric aggregation still need to be added. |
+| Modular OpenClaw upgrade | Partially implemented | Frontend/backend are decoupled, AS2 is behind an adapter/runtime layer, and every run persists `state.json`, `events.jsonl`, and `audit.md`. |
+
+In short: the architecture is suitable for continuing the Capstone implementation, especially if the selected focus is The Planner. It is not yet a complete proof that all three frontiers improve over a baseline.
+
+## What Is Implemented
 
 - Runs an auditable planner on top of a real AgentScope 2 Agent/Toolkit runtime when provider credentials are configured.
-- Streams planner events over SSE.
+- Falls back to a deterministic local planner when no model key is present, so every run still completes and produces evidence.
+- Streams planner events to the frontend over Server-Sent Events.
 - Persists every run under `data/runs/{run_id}`.
 - Generates an `audit.md` report for every run.
 - Serves a static frontend from `frontend/` that talks to the backend API.
-- Uses the real `agentscope==2.0.1` package for Agent, ReAct loop, Toolkit, permission context, `UserMsg` snapshots, and event type mapping.
+- Uses `agentscope==2.0.1` for Agent, ReAct loop, Toolkit, permission context, `UserMsg` snapshots, and event type mapping.
 
-The current implementation embeds the complete usable AgentScope 2 runtime path inside the OpenClaw backend: `Agent + OpenAIChatModel + Toolkit + AgentState + permission context + streamed AS2 events`. The official `agentscope.app` FastAPI service layer is detected as optional infrastructure; this repo keeps the public API as a lightweight stdlib REST/SSE service so the frontend stays decoupled and the MVP remains easy to run.
+## Architecture
+
+```text
+frontend static console
+  -> OpenClaw REST/SSE API
+  -> RunManager session
+  -> LocalAuditPlanner control plane
+  -> AgentScope 2 runtime boundary
+       - Agent
+       - OpenAIChatModel with OpenAICredential
+       - Toolkit
+       - AgentState session id
+       - PermissionContext workspace scope
+       - ReActConfig
+       - streamed AgentScope events
+  -> OpenClaw permission gate
+  -> events.jsonl/state.json/audit.md
+```
+
+The model-backed AS2 path proposes candidate steps, but OpenClaw still owns permission enforcement and audit persistence. This keeps the system auditable even when the model provider changes.
+
+## Planner Loop
+
+The current planner is a bounded, auditable approximation of the Direction 3 goal:
+
+1. Normalize the user goal.
+2. Generate multiple candidate actions.
+3. Score candidates by impact, evidence value, reversibility, and risk.
+4. Select the top bounded path.
+5. For each selected step, emit reasoning, permission, tool call, tool result, and critique events.
+6. Produce a final response and Markdown audit report.
+
+This is not full LATS/MCTS or ToolChain*/A* yet. The next planner milestone is to replace the fixed top-k selection with a real search tree:
+
+- State: goal, workspace summary, action history, observations, permission state.
+- Action: tool call or planning step.
+- Value: expected task success, evidence value, loop risk, hallucination risk, and cost.
+- Search: MCTS for exploration/exploitation or A* with `g+h` cost.
+
+## AgentScope 2 Runtime
+
+OpenClaw maps AgentScope 2 concepts to local modules:
+
+- AS2 package and provider detection: `backend/openclaw/as2_adapter.py`
+- Embedded AS2 Agent/Toolkit runtime: `backend/openclaw/as2_runtime.py`
+- Planner orchestration: `backend/openclaw/planner.py`
+- Permission policy: `backend/openclaw/permissions.py`
+- Run persistence: `backend/openclaw/storage.py`
+- Audit rendering: `backend/openclaw/audit.py`
+- REST/SSE service: `backend/openclaw/server.py`
+
+The embedded runtime registers four read-only OpenClaw tools:
+
+- `openclaw_audit_schema`
+- `openclaw_workspace_inventory`
+- `openclaw_permission_probe`
+- `openclaw_score_candidate`
+
+The optional `agentscope.app` FastAPI service stack is detected but not required by the current implementation. The backend uses a lightweight Python standard-library HTTP service so the project runs without Node/npm or extra app-server infrastructure.
+
+## Evaluation Plan
+
+The Capstone requires a Baseline vs Optimized comparison. This repo should add a benchmark harness before claiming final optimization results.
+
+Recommended metrics from the brief:
+
+- Token or dollar cost.
+- Task accuracy or success rate.
+- Hallucination rate.
+- Loop failure rate.
+- Latency.
+- Permission-gate interventions.
+
+Suggested comparison:
+
+| Variant | Description | Main metric |
+| --- | --- | --- |
+| Baseline | Single model, full context, greedy one-step planner | Current cost, accuracy, hallucination, loop failures |
+| Optimized Planner | AS2 runtime plus MCTS/A* planner | Lower hallucination and loop failure rate |
+| Optimized Strategist | RouteLLM/FrugalGPT-style model router | 60-80% lower model cost at similar accuracy |
+| Optimized Architect | Letta/ACE-style progressive context injection | 20%+ improvement on complex context-heavy tasks |
 
 ## Install
 
@@ -39,6 +142,8 @@ Open:
 ```text
 http://127.0.0.1:4173
 ```
+
+## Model Provider
 
 To enable the model-backed AS2 planner with DeepSeek's OpenAI-compatible API, provide a DeepSeek key at process start:
 
@@ -93,7 +198,7 @@ curl -s http://127.0.0.1:8787/api/runs \
 - `EXPLORE`: read-only planning only; mutating actions deny.
 - `ACCEPT_EDITS`: bounded workspace edits are allowed.
 - `DONT_ASK`: uncertain or mutating actions deny.
-- `BYPASS`: non-denied mutating actions are allowed in the sandboxed MVP.
+- `BYPASS`: non-denied mutating actions are allowed in the sandboxed current implementation.
 
 ## Project Layout
 
@@ -101,6 +206,7 @@ curl -s http://127.0.0.1:8787/api/runs \
 backend/openclaw/
   as2_adapter.py
   as2_runtime.py
+  as2_openai.py
   audit.py
   models.py
   permissions.py
@@ -108,7 +214,7 @@ backend/openclaw/
   server.py
   storage.py
 docs/
-  MVP_PLAN.md
+  AS2_ARCHITECTURE.md
 frontend/
   app.js
   index.html
@@ -117,6 +223,8 @@ scripts/
   start_backend.sh
   start_frontend.sh
 tests/
+  test_as2_adapter.py
+  test_as2_runtime.py
   test_permissions.py
   test_planner.py
   test_server.py
@@ -128,21 +236,10 @@ tests/
 .venv/bin/python -m unittest discover -s tests
 ```
 
-## AgentScope 2 Architecture
+## Roadmap To Full Capstone
 
-OpenClaw maps AS2 concepts to local modules as follows:
-
-- AS2 Agent/ReAct runtime: `backend/openclaw/as2_runtime.py`
-- AS2 Toolkit tools: `openclaw_audit_schema`, `openclaw_workspace_inventory`, `openclaw_permission_probe`, `openclaw_score_candidate`
-- AS2 session/workspace state: `build_as2_agent_state()`
-- AS2 event bridge: local events carry `as2_event_type` and AS2 model events are persisted as `as2_model_event`
-- OpenClaw control plane: `planner.py`, `permissions.py`, `storage.py`, and `audit.py`
-
-The model-backed AS2 path proposes candidate steps, but OpenClaw still owns permission enforcement and audit persistence. If no provider key is configured or AS2 model execution fails, the planner falls back to deterministic local candidates and still writes a complete audit trail.
-
-## Next Steps
-
-- Add optional `agentscope.app` FastAPI/Redis service deployment for multi-session production hosting.
-- Add user authentication and tenant-scoped storage.
-- Persist approval rules and human confirmation events.
-- Add real workspace tool execution in Docker/E2B rather than MVP simulation.
+1. Add a benchmark harness with shared task fixtures, metric aggregation, and Baseline vs Optimized reports.
+2. Implement a real MCTS or A* planner module and compare it against the current greedy/top-k planner.
+3. Add a model-routing layer inspired by RouteLLM or FrugalGPT.
+4. Add progressive context injection using memory blocks, retrieval, and compaction.
+5. Publish head-to-head results as Markdown/JSON artifacts under an audit or benchmark output directory.
