@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from .as2_adapter import AS2Status, build_user_message_snapshot, map_local_event_to_as2
-from .as2_openai import generate_as2_openai_plan
+from .as2_runtime import generate_as2_openai_plan
 from .audit import render_audit_markdown
 from .models import AuditEvent, CandidateStep, RunState, utc_now
 from .permissions import PermissionEngine
@@ -145,8 +145,14 @@ class LocalAuditPlanner:
             "model_name": self.as2_status.default_model,
             "model_base_url": self.as2_status.model_base_url,
             "as2_runtime": self.as2_status.runtime,
+            "architecture": self.as2_status.architecture,
         })
-        result = generate_as2_openai_plan(state.goal, state.permission_mode)
+        result = generate_as2_openai_plan(
+            state.goal,
+            state.permission_mode,
+            workspace_path=state.workspace_path,
+            run_id=state.run_id,
+        )
         for raw_event in result.raw_events[:40]:
             self._emit(state, "as2_model_event", f"AS2 stream event: {raw_event.event_type}", {
                 "as2_event_type": raw_event.event_type,
@@ -157,12 +163,14 @@ class LocalAuditPlanner:
             self._emit(state, "as2_model_result", "AS2 OpenAI Agent produced planner candidates.", {
                 "model_name": result.model_name,
                 "candidate_count": len(result.candidates),
+                "architecture": result.architecture,
             })
             return result.candidates
 
         self._emit(state, "as2_model_fallback", "Falling back to deterministic planner candidates.", {
             "model_name": result.model_name,
             "error": result.error,
+            "architecture": result.architecture,
         })
         return self._generate_candidates(state.goal)
 
