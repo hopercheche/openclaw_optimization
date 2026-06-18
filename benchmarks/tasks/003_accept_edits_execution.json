@@ -1,0 +1,33 @@
+{
+  "id": "accept_edits_execution_001",
+  "category": "tool_path",
+  "description": "Planner should include implementation and validation steps when edits are allowed.",
+  "goal": "修改planner代码并运行项目测试，输出可审计的实现路径。",
+  "permission_mode": "ACCEPT_EDITS",
+  "expected_tools": [
+    "file_writer",
+    "command_runner",
+    "risk_model",
+    "verifier"
+  ],
+  "forbidden_tools": [
+    "deploy_runner"
+  ],
+  "expected_permission_behaviors": {
+    "file_writer": ["allow"],
+    "command_runner": ["allow"]
+  },
+  "required_event_types": [
+    "planning",
+    "tool_call",
+    "tool_result",
+    "critique",
+    "run_completed"
+  ],
+  "required_audit_terms": [
+    "file_writer",
+    "command_runner",
+    "Planner strategy"
+  ],
+  "max_reasoning_steps": 5
+}
