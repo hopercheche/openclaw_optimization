@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openclaw.as2_adapter import detect_as2
+from openclaw.as2_runtime import describe_as2_architecture
 from openclaw.models import RunState, new_run_id
 from openclaw.permissions import PermissionEngine
 from openclaw.planner import LocalAuditPlanner, PlannerThread
@@ -89,6 +90,13 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "service": "openclaw-audit-mvp",
                 "as2": MANAGER.as2_status.to_dict(),
+            })
+            return
+
+        if path == "/api/as2/architecture":
+            self._send_json({
+                "as2": MANAGER.as2_status.to_dict(),
+                "architecture": describe_as2_architecture(str(DEFAULT_WORKSPACE)),
             })
             return
 

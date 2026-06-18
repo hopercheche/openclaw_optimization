@@ -179,6 +179,11 @@ function connectStream(runId, lastId = 0) {
   const eventTypes = [
     "run_started",
     "goal_analysis",
+    "as2_model_skipped",
+    "as2_model_started",
+    "as2_model_event",
+    "as2_model_result",
+    "as2_model_fallback",
     "candidate_step",
     "planning",
     "reasoning",
