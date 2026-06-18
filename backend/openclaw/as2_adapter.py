@@ -38,6 +38,7 @@ class AS2Status:
     model_base_url: str | None = None
     default_model: str | None = None
     primitives: dict[str, bool] = field(default_factory=dict)
+    architecture: dict[str, bool] = field(default_factory=dict)
     event_types: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,6 +52,7 @@ class AS2Status:
             "model_base_url": self.model_base_url,
             "default_model": self.default_model,
             "primitives": self.primitives,
+            "architecture": self.architecture,
             "event_types": self.event_types,
         }
 
@@ -119,6 +121,26 @@ def detect_as2() -> AS2Status:
         except Exception:
             primitives[key] = False
 
+    architecture: dict[str, bool] = {}
+    for key, import_path in {
+        "AgentState": "agentscope.state",
+        "PermissionMode": "agentscope.permission",
+        "PermissionContext": "agentscope.permission",
+        "ReActConfig": "agentscope.agent",
+        "FunctionTool": "agentscope.tool",
+        "Read": "agentscope.tool",
+        "Grep": "agentscope.tool",
+        "Glob": "agentscope.tool",
+        "create_app": "agentscope.app",
+        "LocalWorkspaceManager": "agentscope.app.workspace_manager",
+    }.items():
+        try:
+            module = import_module(import_path)
+            getattr(module, key)
+            architecture[key] = True
+        except Exception:
+            architecture[key] = False
+
     event_types: list[str] = []
     try:
         event_type = getattr(import_module("agentscope.event"), "EventType")
@@ -129,21 +151,50 @@ def detect_as2() -> AS2Status:
     provider_config = resolve_model_provider_config()
 
     all_core_primitives = all(primitives.values())
+    agent_runtime_ready = all_core_primitives and all(
+        architecture.get(key, False)
+        for key in [
+            "AgentState",
+            "PermissionMode",
+            "PermissionContext",
+            "ReActConfig",
+            "FunctionTool",
+        ]
+    )
     return AS2Status(
-        available=all_core_primitives,
+        available=agent_runtime_ready,
         package_version=package_version,
-        runtime="agentscope_2_installed" if all_core_primitives else "agentscope_partial_import",
+        runtime=(
+            "agentscope_2_full_agent_runtime"
+            if agent_runtime_ready
+            else "agentscope_partial_import"
+        ),
         note=(
-            "agentscope core primitives are importable; model-backed Agent execution "
-            "requires provider credentials"
+            "agentscope agent, toolkit, permission, message, and event "
+            "primitives are importable; model-backed execution requires "
+            "provider credentials"
         ),
         model_ready=provider_config.ready,
         model_provider=provider_config.provider,
         model_base_url=provider_config.base_url,
         default_model=provider_config.model,
         primitives=primitives,
+        architecture=architecture,
         event_types=event_types,
     )
+
+
+def map_permission_mode_to_as2(mode: str) -> Any:
+    permission_mode = import_module("agentscope.permission").PermissionMode
+    normalized = mode.upper()
+    mapping = {
+        "DEFAULT": permission_mode.DEFAULT,
+        "EXPLORE": permission_mode.EXPLORE,
+        "ACCEPT_EDITS": permission_mode.ACCEPT_EDITS,
+        "BYPASS": permission_mode.BYPASS,
+        "DONT_ASK": permission_mode.DONT_ASK,
+    }
+    return mapping.get(normalized, permission_mode.DEFAULT)
 
 
 LOCAL_TO_AS2_EVENT = {
