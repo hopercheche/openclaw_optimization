@@ -10,6 +10,7 @@ from .as2_runtime import generate_as2_openai_plan
 from .audit import render_audit_markdown
 from .models import AuditEvent, CandidateStep, RunState, utc_now
 from .permissions import PermissionEngine
+from .search_planner import DEFAULT_PLANNER_STRATEGY, normalize_planner_strategy, select_planner_path
 from .storage import RunStorage
 
 
@@ -25,11 +26,13 @@ class LocalAuditPlanner:
         permission_engine: PermissionEngine,
         as2_status: AS2Status,
         event_sink: EventSink | None = None,
+        planner_strategy: str | None = None,
     ) -> None:
         self.storage = storage
         self.permission_engine = permission_engine
         self.as2_status = as2_status
         self.event_sink = event_sink
+        self.planner_strategy = normalize_planner_strategy(planner_strategy or DEFAULT_PLANNER_STRATEGY)
 
     def run(self, state: RunState) -> RunState:
         state.status = "running"
@@ -43,6 +46,7 @@ class LocalAuditPlanner:
         self._emit(state, "goal_analysis", "Normalized user goal and extracted audit intent.", {
             "goal": state.goal.strip(),
             "permission_mode": state.permission_mode,
+            "planner_strategy": state.planner_strategy,
         })
 
         candidates = self._generate_candidates_from_runtime(state)
@@ -51,10 +55,20 @@ class LocalAuditPlanner:
                 "candidate": candidate.to_dict(),
             })
 
-        selected = sorted(candidates, key=lambda item: item.score, reverse=True)[:5]
+        selection = select_planner_path(
+            candidates,
+            state,
+            self.permission_engine,
+            state.planner_strategy or self.planner_strategy,
+        )
+        for trace_event in selection.trace_events:
+            self._emit(state, trace_event.event_type, trace_event.message, trace_event.data)
+        selected = selection.selected
         self._emit(state, "planning", "Selected bounded high-value planner path.", {
             "selected_titles": [step.title for step in selected],
-            "selection_rule": "top_5_by_impact_evidence_reversibility_minus_risk",
+            "selected_tools": [step.tool_name for step in selected],
+            "planner_strategy": selection.strategy_name,
+            "selection_rule": selection.selection_rule,
         })
 
         completed_titles: list[str] = []

@@ -31,6 +31,7 @@ def render_audit_markdown(state: RunState, events: list[AuditEvent]) -> str:
         f"- Goal: {state.goal}",
         f"- Status: {state.status}",
         f"- Permission mode: {state.permission_mode}",
+        f"- Planner strategy: {state.planner_strategy}",
         f"- Workspace: `{state.workspace_path}`",
         f"- Created at: {state.created_at}",
         f"- Updated at: {state.updated_at}",
@@ -75,4 +76,3 @@ def render_audit_markdown(state: RunState, events: list[AuditEvent]) -> str:
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
-

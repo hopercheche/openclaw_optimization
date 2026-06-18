@@ -71,6 +71,7 @@ class RunState:
     goal: str
     permission_mode: str
     workspace_path: str
+    planner_strategy: str = "greedy_topk"
     status: RunStatus = "queued"
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
@@ -81,4 +82,3 @@ class RunState:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
