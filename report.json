@@ -1,0 +1,16 @@
+{
+  "total_queries": 6,
+  "avg_latency_ms": 621.2,
+  "avg_tokens": 27.7,
+  "total_cost_usd": 0.0249,
+  "tier_distribution": {
+    "small": 6,
+    "mid": 0,
+    "large": 0
+  },
+  "cost_comparison": {
+    "routed_cost": 0.0249,
+    "always_large_cost": 0.498,
+    "savings_pct": 95.0
+  }
+}
