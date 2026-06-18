@@ -1,6 +1,11 @@
-data/
+data/*
+!data/benchmarks/
+data/benchmarks/*
+!data/benchmarks/*/
+data/benchmarks/*/*
+!data/benchmarks/*/report.md
+!data/benchmarks/*/metrics.json
 __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
-
