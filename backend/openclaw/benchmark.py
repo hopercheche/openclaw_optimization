@@ -86,6 +86,10 @@ class BenchmarkTaskResult:
     reasoning_steps: int
     search_event_count: int
     model_event_count: int
+    model_started_count: int
+    model_result_count: int
+    model_fallback_count: int
+    model_skipped_count: int
     selected_tools: list[str]
     tool_calls: list[str]
     permission_behaviors: dict[str, list[str]]
@@ -288,6 +292,10 @@ def _score_task(
     reasoning_steps = sum(1 for event in events if event.event_type == "reasoning")
     search_event_count = sum(1 for event in events if event.event_type.startswith("search_"))
     model_event_count = sum(1 for event in events if event.event_type.startswith("as2_model"))
+    model_started_count = sum(1 for event in events if event.event_type == "as2_model_started")
+    model_result_count = sum(1 for event in events if event.event_type == "as2_model_result")
+    model_fallback_count = sum(1 for event in events if event.event_type == "as2_model_fallback")
+    model_skipped_count = sum(1 for event in events if event.event_type == "as2_model_skipped")
     invalid_tool_call_count = sum(1 for tool in tool_calls if tool not in ALLOWED_TOOLS)
     hallucinated_action_count = sum(1 for tool in observed_tools if tool and tool not in ALLOWED_TOOLS)
     loop_failure_count = _count_loop_failures(events)
@@ -329,6 +337,10 @@ def _score_task(
         "reasoning_steps": reasoning_steps,
         "search_event_count": search_event_count,
         "model_event_count": model_event_count,
+        "model_started_count": model_started_count,
+        "model_result_count": model_result_count,
+        "model_fallback_count": model_fallback_count,
+        "model_skipped_count": model_skipped_count,
         "invalid_tool_call_count": invalid_tool_call_count,
         "hallucinated_action_count": hallucinated_action_count,
         "loop_failure_count": loop_failure_count,
@@ -356,6 +368,10 @@ def _score_task(
         reasoning_steps=reasoning_steps,
         search_event_count=search_event_count,
         model_event_count=model_event_count,
+        model_started_count=model_started_count,
+        model_result_count=model_result_count,
+        model_fallback_count=model_fallback_count,
+        model_skipped_count=model_skipped_count,
         selected_tools=selected_tools,
         tool_calls=tool_calls,
         permission_behaviors=permission_behaviors,
@@ -418,6 +434,10 @@ def _summarize(results: list[BenchmarkTaskResult]) -> dict[str, dict[str, float 
     summary: dict[str, dict[str, float | int]] = {}
     for strategy in sorted({result.strategy for result in results}):
         subset = [result for result in results if result.strategy == strategy]
+        model_started_count = sum(result.model_started_count for result in subset)
+        model_result_count = sum(result.model_result_count for result in subset)
+        model_fallback_count = sum(result.model_fallback_count for result in subset)
+        model_skipped_count = sum(result.model_skipped_count for result in subset)
         summary[strategy] = {
             "tasks": len(subset),
             "success_rate": round(sum(1 for result in subset if result.success) / len(subset), 4),
@@ -427,6 +447,19 @@ def _summarize(results: list[BenchmarkTaskResult]) -> dict[str, dict[str, float 
             "mean_reasoning_steps": round(statistics.mean(result.reasoning_steps for result in subset), 4),
             "mean_search_event_count": round(statistics.mean(result.search_event_count for result in subset), 4),
             "mean_model_event_count": round(statistics.mean(result.model_event_count for result in subset), 4),
+            "model_started_count": model_started_count,
+            "model_result_count": model_result_count,
+            "model_fallback_count": model_fallback_count,
+            "model_skipped_count": model_skipped_count,
+            "model_success_rate": (
+                round(model_result_count / model_started_count, 4)
+                if model_started_count else 0
+            ),
+            "model_fallback_rate": (
+                round(model_fallback_count / model_started_count, 4)
+                if model_started_count else 0
+            ),
+            "model_skip_rate": round(model_skipped_count / len(subset), 4),
             "permission_intervention_count": sum(
                 int(result.metrics.get("permission_intervention_count", 0))
                 for result in subset
@@ -594,13 +627,15 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
         "",
         "## Summary",
         "",
-        "| Strategy | Success rate | Mean score | Mean latency | Model events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Success rate | Mean score | Mean latency | Model starts | Model results | Model fallbacks | Model skips | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in run_result.summary.items():
         lines.append(
             f"| `{strategy}` | {metrics['success_rate']:.2%} | {metrics['mean_score']:.4f} | "
-            f"{metrics['mean_latency_seconds']:.4f}s | {metrics['mean_model_event_count']:.4f} | "
+            f"{metrics['mean_latency_seconds']:.4f}s | {metrics['model_started_count']} | "
+            f"{metrics['model_result_count']} | {metrics['model_fallback_count']} | "
+            f"{metrics['model_skipped_count']} | "
             f"{metrics['invalid_tool_call_count']} | "
             f"{metrics['hallucinated_action_count']} | {metrics['loop_failure_count']} | "
             f"{metrics['unsafe_auto_allow_count']} |"
@@ -642,6 +677,7 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
             f"- Latency: {result.latency_seconds}s",
             f"- Search events: {result.search_event_count}",
             f"- Model events: {result.model_event_count}",
+            f"- Model started/result/fallback/skipped: {result.model_started_count}/{result.model_result_count}/{result.model_fallback_count}/{result.model_skipped_count}",
             f"- Selected tools: {result.selected_tools}",
             f"- Tool calls: {result.tool_calls}",
             f"- Missing expected tools: {result.missing_expected_tools}",
