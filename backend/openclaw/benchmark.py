@@ -85,6 +85,7 @@ class BenchmarkTaskResult:
     event_count: int
     reasoning_steps: int
     search_event_count: int
+    reflection_event_count: int
     model_event_count: int
     model_started_count: int
     model_result_count: int
@@ -291,6 +292,7 @@ def _score_task(
     )
     reasoning_steps = sum(1 for event in events if event.event_type == "reasoning")
     search_event_count = sum(1 for event in events if event.event_type.startswith("search_"))
+    reflection_event_count = sum(1 for event in events if event.event_type.startswith("reflection_"))
     model_event_count = sum(1 for event in events if event.event_type.startswith("as2_model"))
     model_started_count = sum(1 for event in events if event.event_type == "as2_model_started")
     model_result_count = sum(1 for event in events if event.event_type == "as2_model_result")
@@ -301,8 +303,10 @@ def _score_task(
     loop_failure_count = _count_loop_failures(events)
     unsafe_auto_allow_count = _count_unsafe_auto_allows(events, set(task.forbidden_tools))
 
-    if strategy == "audit_astar" and search_event_count == 0:
+    if strategy in {"audit_astar", "audit_reflexion"} and search_event_count == 0:
         missing_required_events.append("search_*")
+    if strategy == "audit_reflexion" and reflection_event_count == 0:
+        missing_required_events.append("reflection_*")
     if task.max_reasoning_steps is not None and reasoning_steps > task.max_reasoning_steps:
         missing_required_events.append("max_reasoning_steps")
 
@@ -336,6 +340,7 @@ def _score_task(
         "event_count": len(events),
         "reasoning_steps": reasoning_steps,
         "search_event_count": search_event_count,
+        "reflection_event_count": reflection_event_count,
         "model_event_count": model_event_count,
         "model_started_count": model_started_count,
         "model_result_count": model_result_count,
@@ -367,6 +372,7 @@ def _score_task(
         event_count=len(events),
         reasoning_steps=reasoning_steps,
         search_event_count=search_event_count,
+        reflection_event_count=reflection_event_count,
         model_event_count=model_event_count,
         model_started_count=model_started_count,
         model_result_count=model_result_count,
@@ -446,6 +452,7 @@ def _summarize(results: list[BenchmarkTaskResult]) -> dict[str, dict[str, float 
             "mean_event_count": round(statistics.mean(result.event_count for result in subset), 4),
             "mean_reasoning_steps": round(statistics.mean(result.reasoning_steps for result in subset), 4),
             "mean_search_event_count": round(statistics.mean(result.search_event_count for result in subset), 4),
+            "mean_reflection_event_count": round(statistics.mean(result.reflection_event_count for result in subset), 4),
             "mean_model_event_count": round(statistics.mean(result.model_event_count for result in subset), 4),
             "model_started_count": model_started_count,
             "model_result_count": model_result_count,
@@ -627,13 +634,14 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
         "",
         "## Summary",
         "",
-        "| Strategy | Success rate | Mean score | Mean latency | Model starts | Model results | Model fallbacks | Model skips | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Model starts | Model results | Model fallbacks | Model skips | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in run_result.summary.items():
         lines.append(
             f"| `{strategy}` | {metrics['success_rate']:.2%} | {metrics['mean_score']:.4f} | "
-            f"{metrics['mean_latency_seconds']:.4f}s | {metrics['model_started_count']} | "
+            f"{metrics['mean_latency_seconds']:.4f}s | {metrics['mean_search_event_count']:.4f} | "
+            f"{metrics['mean_reflection_event_count']:.4f} | {metrics['model_started_count']} | "
             f"{metrics['model_result_count']} | {metrics['model_fallback_count']} | "
             f"{metrics['model_skipped_count']} | "
             f"{metrics['invalid_tool_call_count']} | "
@@ -646,13 +654,14 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
         lines.extend([
             f"### {split}",
             "",
-            "| Strategy | Success rate | Mean score | Mean latency | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for strategy, metrics in split_summary.items():
             lines.append(
                 f"| `{strategy}` | {metrics['success_rate']:.2%} | {metrics['mean_score']:.4f} | "
-                f"{metrics['mean_latency_seconds']:.4f}s | {metrics['invalid_tool_call_count']} | "
+                f"{metrics['mean_latency_seconds']:.4f}s | {metrics['mean_search_event_count']:.4f} | "
+                f"{metrics['mean_reflection_event_count']:.4f} | {metrics['invalid_tool_call_count']} | "
                 f"{metrics['hallucinated_action_count']} | {metrics['loop_failure_count']} | "
                 f"{metrics['unsafe_auto_allow_count']} |"
             )
@@ -676,6 +685,7 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
             f"- Score: {result.score}",
             f"- Latency: {result.latency_seconds}s",
             f"- Search events: {result.search_event_count}",
+            f"- Reflection events: {result.reflection_event_count}",
             f"- Model events: {result.model_event_count}",
             f"- Model started/result/fallback/skipped: {result.model_started_count}/{result.model_result_count}/{result.model_fallback_count}/{result.model_skipped_count}",
             f"- Selected tools: {result.selected_tools}",
@@ -699,7 +709,7 @@ def parse_strategies(raw: str) -> list[str]:
     unknown = sorted(set(strategies) - SUPPORTED_PLANNER_STRATEGIES)
     if unknown:
         raise ValueError(f"Unsupported planner strategies: {', '.join(unknown)}")
-    return strategies or ["greedy_topk", "audit_astar"]
+    return strategies or ["greedy_topk", "audit_astar", "audit_reflexion"]
 
 
 def normalize_runtime_mode(raw: str | None) -> str:
@@ -725,7 +735,7 @@ def main() -> None:
     parser.add_argument("--tasks-dir", type=Path, default=DEFAULT_TASKS_DIR)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--strategies", default="greedy_topk,audit_astar")
+    parser.add_argument("--strategies", default="greedy_topk,audit_astar,audit_reflexion")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
         "--split",

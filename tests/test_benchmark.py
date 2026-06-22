@@ -33,7 +33,7 @@ class BenchmarkTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = PlannerBenchmarkRunner(
                 tasks=[task],
-                strategies=["greedy_topk", "audit_astar"],
+                strategies=["greedy_topk", "audit_astar", "audit_reflexion"],
                 output_dir=Path(temp_dir),
             ).run()
 
@@ -44,10 +44,15 @@ class BenchmarkTest(unittest.TestCase):
             self.assertFalse(result.as2_status["model_ready"])
             self.assertIn("greedy_topk", result.summary)
             self.assertIn("audit_astar", result.summary)
+            self.assertIn("audit_reflexion", result.summary)
             self.assertIn("dev", result.split_summary)
             self.assertGreater(
                 result.summary["audit_astar"]["mean_score"],
                 result.summary["greedy_topk"]["mean_score"],
+            )
+            self.assertGreater(
+                result.summary["audit_reflexion"]["mean_reflection_event_count"],
+                0,
             )
             self.assertTrue((Path(temp_dir) / "metrics.json").exists())
             self.assertTrue((Path(temp_dir) / "report.md").exists())
@@ -88,6 +93,10 @@ class BenchmarkTest(unittest.TestCase):
             self.assertIn("holdout", result.split_summary)
 
     def test_parse_strategies_rejects_unknown_strategy(self) -> None:
+        self.assertEqual(
+            parse_strategies("audit_reflexion"),
+            ["audit_reflexion"],
+        )
         with self.assertRaises(ValueError):
             parse_strategies("greedy_topk,missing")
 

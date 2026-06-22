@@ -9,7 +9,7 @@ from .permissions import PermissionEngine
 
 
 DEFAULT_PLANNER_STRATEGY = "greedy_topk"
-SUPPORTED_PLANNER_STRATEGIES = {"greedy_topk", "audit_astar"}
+SUPPORTED_PLANNER_STRATEGIES = {"greedy_topk", "audit_astar", "audit_reflexion"}
 
 
 @dataclass(slots=True)
@@ -67,6 +67,11 @@ def select_planner_path(
     unique_candidates = _deduplicate_candidates(candidates)
     if strategy == "audit_astar":
         return AuditAStarPlannerStrategy(permission_engine=permission_engine, max_depth=max_steps).select(
+            unique_candidates,
+            state,
+        )
+    if strategy == "audit_reflexion":
+        return AuditReflexionPlannerStrategy(permission_engine=permission_engine, max_depth=max_steps).select(
             unique_candidates,
             state,
         )
@@ -326,6 +331,113 @@ class AuditAStarPlannerStrategy:
         trace.append(PlannerTraceEvent(event_type=event_type, message=message, data=data))
 
 
+class AuditReflexionPlannerStrategy:
+    """A* path search followed by deterministic Reflexion-style path repair."""
+
+    name = "audit_reflexion"
+
+    def __init__(
+        self,
+        permission_engine: PermissionEngine,
+        max_depth: int = 5,
+    ) -> None:
+        self.permission_engine = permission_engine
+        self.max_depth = max_depth
+        self.astar = AuditAStarPlannerStrategy(
+            permission_engine=permission_engine,
+            max_depth=max_depth,
+            max_expansions=64,
+            max_trace_events=96,
+        )
+
+    def select(self, candidates: list[CandidateStep], state: RunState) -> PlannerSelection:
+        base = self.astar.select(candidates, state)
+        trace = list(base.trace_events)
+        desired_tools = _desired_tools_for_goal(state.goal)
+        selected = _deduplicate_candidates(base.selected)
+        issues: list[str] = []
+
+        _append_trace(trace, "reflection_started", "Reflexion planner started deterministic path review.", {
+            "strategy": self.name,
+            "base_strategy": base.strategy_name,
+            "desired_tools": sorted(desired_tools),
+            "base_selected_tools": [step.tool_name for step in selected],
+            "research_basis": [
+                "LATS",
+                "Reflexion",
+                "Self-Refine",
+                "Tree of Thoughts",
+                "ToolChain*",
+                "AFlow",
+            ],
+        })
+
+        if _goal_disallows_mutation(state.goal):
+            selected = _remove_mutating_steps(selected, issues)
+
+        selected = self._ensure_tool(selected, candidates, "risk_model", issues, position="front")
+        for tool_name in _reflection_tool_order(desired_tools):
+            selected = self._ensure_tool(selected, candidates, tool_name, issues, position="auto")
+        selected = self._ensure_tool(selected, candidates, "verifier", issues, position="back")
+
+        selected = _order_reflection_path(selected, desired_tools)
+        selected = _trim_reflection_path(selected, desired_tools, self.max_depth, issues)
+        selected = _deduplicate_candidates(selected)
+
+        if not selected and candidates:
+            issues.append("fallback_to_greedy_candidates_after_empty_reflection")
+            selected = GreedyTopKPlannerStrategy(max_steps=self.max_depth).select(candidates, state).selected
+
+        if not issues:
+            issues.append("no_path_repair_needed")
+        for issue in issues:
+            _append_trace(trace, "reflection_issue", "Reflexion planner recorded a path review note.", {
+                "issue": issue,
+            })
+
+        _append_trace(trace, "reflection_refined", "Reflexion planner selected repaired audited path.", {
+            "strategy": self.name,
+            "selected_titles": [step.title for step in selected],
+            "selected_tools": [step.tool_name for step in selected],
+            "covered_desired_tools": sorted(desired_tools & {step.tool_name for step in selected}),
+            "missing_desired_tools": sorted(desired_tools - {step.tool_name for step in selected}),
+            "issues": issues,
+        })
+
+        return PlannerSelection(
+            strategy_name=self.name,
+            selected=selected,
+            selection_rule=(
+                "audit_reflexion_astar_path_plus_reflection_coverage_"
+                "safety_bookends_and_read_only_repair"
+            ),
+            trace_events=trace,
+        )
+
+    def _ensure_tool(
+        self,
+        selected: list[CandidateStep],
+        candidates: list[CandidateStep],
+        tool_name: str,
+        issues: list[str],
+        position: str,
+    ) -> list[CandidateStep]:
+        if any(step.tool_name == tool_name for step in selected):
+            return selected
+
+        candidate = _best_candidate_for_tool(candidates, tool_name, selected)
+        if candidate is None:
+            issues.append(f"missing_candidate_for_{tool_name}")
+            return selected
+
+        issues.append(f"inserted_{tool_name}")
+        if position == "front":
+            return [candidate, *selected]
+        if position == "back":
+            return [*selected, candidate]
+        return [*selected, candidate]
+
+
 def _deduplicate_candidates(candidates: Iterable[CandidateStep]) -> list[CandidateStep]:
     unique: list[CandidateStep] = []
     seen: set[str] = set()
@@ -347,18 +459,7 @@ def _desired_tools_for_goal(goal: str) -> set[str]:
         "risk_model",
         "verifier",
     }
-    explicit_no_edit = any(term in lower_goal for term in [
-        "without editing",
-        "without modifying",
-        "without writing",
-        "no edits",
-        "read-only",
-        "不修改",
-        "不要修改",
-        "不写入",
-        "不要写入",
-        "只读",
-    ])
+    explicit_no_edit = _goal_disallows_mutation(goal)
     mutating_goal = not explicit_no_edit and any(term in lower_goal for term in [
         "write",
         "edit",
@@ -382,6 +483,122 @@ def _desired_tools_for_goal(goal: str) -> set[str]:
 def _action_signature(candidate: CandidateStep) -> str:
     normalized_action = " ".join(candidate.action.lower().split())[:120]
     return f"{candidate.tool_name}:{normalized_action}"
+
+
+def _goal_disallows_mutation(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "without editing",
+        "without modifying",
+        "without writing",
+        "no edits",
+        "read-only",
+        "不修改",
+        "不要修改",
+        "不写入",
+        "不要写入",
+        "只读",
+    ])
+
+
+def _remove_mutating_steps(candidates: list[CandidateStep], issues: list[str]) -> list[CandidateStep]:
+    filtered = [candidate for candidate in candidates if not _is_mutating_step(candidate)]
+    removed = len(candidates) - len(filtered)
+    if removed:
+        issues.append(f"removed_{removed}_mutating_steps_for_explicit_read_only_goal")
+    return filtered
+
+
+def _is_mutating_step(candidate: CandidateStep) -> bool:
+    return candidate.mutates_workspace or candidate.tool_name in {
+        "file_writer",
+        "command_runner",
+        "deploy_runner",
+    }
+
+
+def _best_candidate_for_tool(
+    candidates: list[CandidateStep],
+    tool_name: str,
+    selected: list[CandidateStep],
+) -> CandidateStep | None:
+    selected_signatures = {_action_signature(step) for step in selected}
+    matching = [
+        candidate
+        for candidate in candidates
+        if candidate.tool_name == tool_name and _action_signature(candidate) not in selected_signatures
+    ]
+    if not matching:
+        return None
+    return sorted(
+        matching,
+        key=lambda item: (
+            item.score,
+            item.evidence_value,
+            item.reversibility,
+            -item.risk,
+        ),
+        reverse=True,
+    )[0]
+
+
+def _reflection_tool_order(desired_tools: set[str]) -> list[str]:
+    if "deploy_runner" in desired_tools:
+        return ["goal_analyzer", "risk_model", "planner", "deploy_runner", "verifier"]
+    if "file_writer" in desired_tools or "command_runner" in desired_tools:
+        return ["risk_model", "planner", "file_writer", "command_runner", "verifier"]
+    return ["goal_analyzer", "workspace_inspector", "planner", "risk_model", "verifier"]
+
+
+def _order_reflection_path(candidates: list[CandidateStep], desired_tools: set[str]) -> list[CandidateStep]:
+    order = _reflection_tool_order(desired_tools)
+    priority = {tool_name: index for index, tool_name in enumerate(order)}
+    return sorted(
+        candidates,
+        key=lambda item: (
+            priority.get(item.tool_name, len(priority) + 1),
+            -item.score,
+            item.risk,
+            item.title,
+        ),
+    )
+
+
+def _trim_reflection_path(
+    candidates: list[CandidateStep],
+    desired_tools: set[str],
+    max_depth: int,
+    issues: list[str],
+) -> list[CandidateStep]:
+    if len(candidates) <= max_depth:
+        return candidates
+
+    required = set(desired_tools)
+    selected: list[CandidateStep] = []
+    for candidate in candidates:
+        if candidate.tool_name in required:
+            selected.append(candidate)
+            required.remove(candidate.tool_name)
+        if len(selected) == max_depth:
+            break
+    for candidate in candidates:
+        if len(selected) == max_depth:
+            break
+        if _action_signature(candidate) in {_action_signature(step) for step in selected}:
+            continue
+        selected.append(candidate)
+
+    issues.append(f"trimmed_path_from_{len(candidates)}_to_{len(selected)}")
+    return selected
+
+
+def _append_trace(
+    trace: list[PlannerTraceEvent],
+    event_type: str,
+    message: str,
+    data: dict,
+) -> None:
+    trace.append(PlannerTraceEvent(event_type=event_type, message=message, data=data))
 
 
 def _rounded(value: float) -> float:

@@ -292,18 +292,19 @@ def _render_matrix_report(result: ModelMatrixResult) -> str:
         "",
         "## Matrix Summary",
         "",
-        "| Entry | Runtime | Model ready | Missing env | Stop criteria | `audit_astar` success | `greedy_topk` success | Model fallback rate | Model skip rate |",
-        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Entry | Runtime | Model ready | Missing env | Stop criteria | `audit_reflexion` success | `audit_astar` success | `greedy_topk` success | Model fallback rate | Model skip rate |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for entry in result.entries:
+        reflexion_success = _strategy_success(entry.summary, "audit_reflexion")
         audit_success = _strategy_success(entry.summary, "audit_astar")
         greedy_success = _strategy_success(entry.summary, "greedy_topk")
         overall_model = entry.model_metrics["overall"]
         lines.append(
             f"| `{entry.name}` | {entry.runtime} | {entry.as2_status.get('model_ready')} | "
             f"{', '.join(entry.missing_required_env) or '-'} | "
-            f"{entry.stop_criteria.get('met')} | {audit_success:.2%} | "
-            f"{greedy_success:.2%} | {overall_model['model_fallback_rate']:.2%} | "
+            f"{entry.stop_criteria.get('met')} | {reflexion_success:.2%} | "
+            f"{audit_success:.2%} | {greedy_success:.2%} | {overall_model['model_fallback_rate']:.2%} | "
             f"{overall_model['model_skip_rate']:.2%} |"
         )
 
@@ -360,7 +361,7 @@ def main() -> None:
     parser.add_argument("--tasks-dir", type=Path, default=DEFAULT_TASKS_DIR)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--strategies", default="greedy_topk,audit_astar")
+    parser.add_argument("--strategies", default="greedy_topk,audit_astar,audit_reflexion")
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--split", choices=["all", "dev", "holdout"], default="holdout")
     args = parser.parse_args()
