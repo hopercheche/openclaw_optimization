@@ -1,40 +1,68 @@
 # OpenClawPOpti
 
-OpenClawPOpti is an audit-first AgentScope 2 planner implementation for the OpenClaw Agent Optimization Capstone. The current code embeds a real AgentScope 2 Agent/Toolkit runtime, exposes an auditable planner loop, and records every run as replayable evidence.
+OpenClawPOpti contains Capstone work for OpenClaw agent optimization. The repository currently has two implemented tracks:
 
-The attached Capstone brief defines three optimization frontiers:
+- Direction 1, The Strategist: a rule-based model router MVP that routes requests to small / mid / large model tiers.
+- Direction 3, The Planner: an audit-first AgentScope 2 planner runtime with `greedy_topk` and `audit_astar` planner strategies plus benchmark evidence.
 
-- Direction 1, The Strategist: route each subtask to the cheapest model that is still good enough.
-- Direction 2, The Architect: inject context just in time instead of loading everything into one prompt.
-- Direction 3, The Planner: replace greedy one-step execution with heuristic search planning such as MCTS or A*.
+It does not yet prove all three Capstone directions end to end. Direction 2, The Architect, is still only represented by context-boundary plumbing in the planner runtime.
 
 ## Current Fit Against The Capstone
-
-This repository contains part of the Capstone implementation. It does not yet satisfy the full three-direction requirement end to end.
 
 | Capstone requirement | Current status | Evidence in this repo |
 | --- | --- | --- |
 | Baseline OpenClaw Agent | Partial | The deterministic fallback planner provides a stable baseline loop with fixed candidate generation, scoring, permission checks, and audit logs. |
 | Optimized OpenClaw Agent | Partial | The AS2-backed path embeds `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, `PermissionContext`, and `ReActConfig`; model-backed candidate generation is available when provider credentials are configured. |
-| Direction 1: model routing | Not implemented yet | Provider selection is centralized in `as2_adapter.py`, so a RouteLLM/FrugalGPT-style router can be added, but no router or cost benchmark exists yet. |
-| Direction 2: progressive context | Partially implemented boundary | The runtime has workspace-scoped tools and audit-safe context boundaries, but it does not yet implement memory blocks, retrieval, compaction, or a just-in-time context benchmark. |
-| Direction 3: search planner | Partially implemented | The planner supports the original greedy top-k selector and an optional `audit_astar` selector that performs bounded A*-style search over candidate tool/action paths before permission-gated execution. Full LATS/MCTS remains a later extension. |
-| Head-to-head mathematical proof | Partially implemented | The local benchmark harness compares `greedy_topk` and `audit_astar` on 24 planner tasks with dev/holdout splits and 3-repeat evidence. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
-| Modular OpenClaw upgrade | Partially implemented | Frontend/backend are decoupled, AS2 is behind an adapter/runtime layer, and every run persists `state.json`, `events.jsonl`, and `audit.md`. |
+| Direction 1: model routing | Implemented MVP | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
+| Direction 2: progressive context | Partially implemented boundary | The planner runtime has workspace-scoped tools and audit-safe context boundaries, but no retrieval, memory block, or compaction benchmark yet. |
+| Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search over candidate tool/action paths before permission-gated execution. Full LATS/MCTS remains a later extension. |
+| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk` and `audit_astar` on 24 tasks with dev/holdout splits. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
 
-In short: the architecture is suitable for continuing the Capstone implementation, especially if the selected focus is The Planner. It is not yet a complete proof that all three frontiers improve over a baseline.
+## Strategist Router MVP
 
-## What Is Implemented
+The Strategist MVP routes user requests to a model tier before inference.
 
-- Runs an auditable planner on top of a real AgentScope 2 Agent/Toolkit runtime when provider credentials are configured.
-- Falls back to a deterministic local planner when no model key is present, so every run still completes and produces evidence.
-- Streams planner events to the frontend over Server-Sent Events.
-- Persists every run under `data/runs/{run_id}`.
-- Generates an `audit.md` report for every run.
-- Serves a static frontend from `frontend/` that talks to the backend API.
-- Uses `agentscope==2.0.1` for Agent, ReAct loop, Toolkit, permission context, `UserMsg` snapshots, and event type mapping.
+```text
+user input -> rule-based router -> small/mid/large model tier -> provider -> output + metrics
+```
 
-## Architecture
+Modules:
+
+| Module | Path | Purpose |
+| --- | --- | --- |
+| Model interface | `src/models/` | OpenAI-compatible provider and mock provider. |
+| Rule-based router | `src/router/rule_based.py` | Keyword, length, and complexity heuristics. |
+| Inference pipeline | `src/pipeline/inference.py` | Route, call provider, and return result. |
+| Evaluation metrics | `src/evaluation/metrics.py` | Cost, latency, and tier distribution. |
+| API service | `src/api/server.py` | FastAPI REST endpoints. |
+| CLI demo | `demo.py` | Offline demo and benchmark entrypoint. |
+
+Run the offline mock demo:
+
+```bash
+python3 demo.py demo
+python3 demo.py query "请解释为什么梯度下降能够收敛"
+python3 demo.py benchmark --file data/sample_queries.txt -o report.json
+```
+
+Start the router API:
+
+```bash
+python3 run_server.py
+```
+
+API endpoints:
+
+- `GET /health`
+- `POST /query`
+- `POST /route`
+- `POST /benchmark`
+
+The router thresholds and model tiers live in `config/models.yaml`.
+
+## Planner Runtime
+
+The Planner track is an auditable AgentScope 2 runtime with local permission gates and persisted run evidence.
 
 ```text
 frontend static console
@@ -42,43 +70,16 @@ frontend static console
   -> RunManager session
   -> LocalAuditPlanner control plane
   -> AgentScope 2 runtime boundary
-       - Agent
-       - OpenAIChatModel with OpenAICredential
-       - Toolkit
-       - AgentState session id
-       - PermissionContext workspace scope
-       - ReActConfig
-       - streamed AgentScope events
   -> OpenClaw permission gate
   -> events.jsonl/state.json/audit.md
 ```
 
-The model-backed AS2 path proposes candidate steps, but OpenClaw still owns permission enforcement and audit persistence. This keeps the system auditable even when the model provider changes.
+Planner strategies:
 
-## Planner Loop
+- `greedy_topk`: baseline selector that ranks candidates independently by score.
+- `audit_astar`: optimized selector inspired by ToolChain*, Tree of Thoughts, and LATS. It searches candidate tool/action paths with explicit costs for risk, permission friction, repeated actions, and missing evidence, then records `search_*` events before execution.
 
-The current planner is a bounded, auditable approximation of the Direction 3 goal. It supports two selector strategies:
-
-- `greedy_topk`: the stable baseline that ranks candidates independently by score.
-- `audit_astar`: an optimized selector inspired by ToolChain*, Tree of Thoughts, and LATS. It searches candidate tool/action paths with explicit costs for risk, permission friction, repeated actions, and missing evidence, then records `search_*` events before execution.
-
-Baseline loop:
-
-1. Normalize the user goal.
-2. Generate multiple candidate actions.
-3. Score candidates by impact, evidence value, reversibility, and risk.
-4. Select the top bounded path.
-5. For each selected step, emit reasoning, permission, tool call, tool result, and critique events.
-6. Produce a final response and Markdown audit report.
-
-This is not full LATS/MCTS yet. The next planner milestone is to benchmark `greedy_topk` against `audit_astar`, then add a LATS/MCTS-lite selector if the A* benchmark establishes a useful baseline.
-
-- State: goal, workspace summary, action history, observations, permission state.
-- Action: tool call or planning step.
-- Value: expected task success, evidence value, loop risk, hallucination risk, and cost.
-- Search: MCTS for exploration/exploitation or A* with `g+h` cost.
-
-To enable the optimized selector:
+Enable `audit_astar` for backend runs:
 
 ```bash
 OPENCLAW_PLANNER_STRATEGY=audit_astar scripts/start_backend.sh
@@ -90,68 +91,27 @@ Or pass it per run:
 {"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT","planner_strategy":"audit_astar"}
 ```
 
-## AgentScope 2 Runtime
+## Planner Benchmarks
 
-OpenClaw maps AgentScope 2 concepts to local modules:
-
-- AS2 package and provider detection: `backend/openclaw/as2_adapter.py`
-- Embedded AS2 Agent/Toolkit runtime: `backend/openclaw/as2_runtime.py`
-- Planner orchestration: `backend/openclaw/planner.py`
-- Permission policy: `backend/openclaw/permissions.py`
-- Run persistence: `backend/openclaw/storage.py`
-- Audit rendering: `backend/openclaw/audit.py`
-- REST/SSE service: `backend/openclaw/server.py`
-
-The embedded runtime registers four read-only OpenClaw tools:
-
-- `openclaw_audit_schema`
-- `openclaw_workspace_inventory`
-- `openclaw_permission_probe`
-- `openclaw_score_candidate`
-
-The optional `agentscope.app` FastAPI service stack is detected but not required by the current implementation. The backend uses a lightweight Python standard-library HTTP service so the project runs without Node/npm or extra app-server infrastructure.
-
-## Evaluation
-
-The Capstone requires a Baseline vs Optimized comparison. This repo now includes a local benchmark harness for the Planner direction; it should not be read as final proof for model routing, progressive context, or all model-backed AS2 runtime settings.
-
-Recommended metrics from the brief:
-
-- Token or dollar cost.
-- Task accuracy or success rate.
-- Hallucination rate.
-- Loop failure rate.
-- Latency.
-- Permission-gate interventions.
-
-Suggested comparison:
-
-| Variant | Description | Main metric |
-| --- | --- | --- |
-| Baseline | Single model, full context, greedy one-step planner | Current cost, accuracy, hallucination, loop failures |
-| Optimized Planner | AS2 runtime plus MCTS/A* planner | Lower hallucination and loop failure rate |
-| Optimized Strategist | RouteLLM/FrugalGPT-style model router | 60-80% lower model cost at similar accuracy |
-| Optimized Architect | Letta/ACE-style progressive context injection | 20%+ improvement on complex context-heavy tasks |
-
-The repository now includes a local planner benchmark harness:
+Run the deterministic benchmark:
 
 ```bash
 .venv/bin/python backend/openclaw/benchmark.py --repeats 3
 ```
 
-To run the same benchmark through detected AS2/model-backed candidate generation when provider credentials are configured:
+Run the same protocol through detected AS2/model-backed candidate generation when provider credentials are configured:
 
 ```bash
 .venv/bin/python backend/openclaw/benchmark.py --runtime as2 --repeats 3
 ```
 
-To isolate the held-out task split:
+Run only the held-out split:
 
 ```bash
 .venv/bin/python backend/openclaw/benchmark.py --split holdout --repeats 3
 ```
 
-To compare deterministic fallback against AS2/model-backed configurations without storing secrets:
+Run the provider/model matrix without storing secrets:
 
 ```bash
 .venv/bin/python backend/openclaw/model_matrix.py --config benchmarks/model_matrix.example.json --split holdout --repeats 1
@@ -159,23 +119,14 @@ To compare deterministic fallback against AS2/model-backed configurations withou
 
 The matrix config stores only non-secret model metadata and names of required env vars. API keys are read from the process environment at runtime and are never written to reports.
 
-It compares planner strategies such as `greedy_topk` and `audit_astar` on JSON tasks under `benchmarks/tasks/`, then writes:
-
-```text
-data/benchmarks/{timestamp}/metrics.json
-data/benchmarks/{timestamp}/report.md
-```
-
-See `docs/PLANNER_BENCHMARKS.md` for the external benchmark mapping and local metric schema.
-
-Latest benchmark evidence:
+Latest planner benchmark evidence:
 
 ```text
 data/benchmarks/20260618T091019Z/report.md
 data/benchmarks/20260618T091019Z/metrics.json
 ```
 
-That run used 24 tasks with 3 repeats and met the stop criteria: `audit_astar` reached 100.00% success rate vs `greedy_topk` at 20.83%, with no invalid-tool, hallucinated-action, loop-failure, or unsafe-auto-allow regressions. The same run includes 15 dev tasks and 9 holdout tasks; on holdout, `audit_astar` reached 100.00% success rate vs `greedy_topk` at 33.33%.
+That run used 24 tasks with 3 repeats and met the stop criteria: `audit_astar` reached 100.00% success rate vs `greedy_topk` at 20.83%. The same run includes 15 dev tasks and 9 holdout tasks; on holdout, `audit_astar` reached 100.00% success rate vs `greedy_topk` at 33.33%.
 
 Latest model-matrix smoke evidence:
 
@@ -186,36 +137,11 @@ data/model_matrix/20260622T031111Z/matrix_metrics.json
 
 That smoke used the holdout split with no provider keys in the environment. It verifies matrix execution, required-env detection, and model skip/fallback accounting; it is not a real provider quality comparison.
 
-## Install
+See `docs/PLANNER_BENCHMARKS.md` and `docs/CAPSTONE_PLANNER_RESEARCH.md` for benchmark design and research notes.
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-```
+## AS2 Model Provider
 
-## Run Locally
-
-Start the backend:
-
-```bash
-scripts/start_backend.sh
-```
-
-Start the frontend in another terminal:
-
-```bash
-scripts/start_frontend.sh
-```
-
-Open:
-
-```text
-http://127.0.0.1:4173
-```
-
-## Model Provider
-
-To enable the model-backed AS2 planner with DeepSeek's OpenAI-compatible API, provide a DeepSeek key at process start:
+DeepSeek OpenAI-compatible runtime:
 
 ```bash
 DEEPSEEK_API_KEY=... scripts/start_backend.sh
@@ -235,7 +161,7 @@ OPENCLAW_DEEPSEEK_MODEL=deepseek-v4-flash
 OPENCLAW_MODEL_TIMEOUT_SECONDS=45
 ```
 
-The same runtime also supports OpenAI-compatible OpenAI envs:
+Generic OpenAI-compatible runtime:
 
 ```bash
 OPENAI_API_KEY=... OPENAI_BASE_URL=... OPENCLAW_OPENAI_MODEL=... scripts/start_backend.sh
@@ -243,7 +169,7 @@ OPENAI_API_KEY=... OPENAI_BASE_URL=... OPENCLAW_OPENAI_MODEL=... scripts/start_b
 
 Do not commit API keys. The backend records only provider readiness, base URL, and model name in audit events.
 
-## API
+## Planner API
 
 - `GET /api/health`
 - `GET /api/as2/architecture`
@@ -262,65 +188,40 @@ curl -s http://127.0.0.1:8787/api/runs \
   -d '{"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT"}'
 ```
 
-## Permission Modes
-
-- `DEFAULT`: read-only actions are allowed; mutating actions ask.
-- `EXPLORE`: read-only planning only; mutating actions deny.
-- `ACCEPT_EDITS`: bounded workspace edits are allowed.
-- `DONT_ASK`: uncertain or mutating actions deny.
-- `BYPASS`: non-denied mutating actions are allowed in the sandboxed current implementation.
-
 ## Project Layout
 
 ```text
-backend/openclaw/
-  as2_adapter.py
-  as2_runtime.py
-  as2_openai.py
-  audit.py
-  benchmark.py
-  model_matrix.py
-  models.py
-  permissions.py
-  planner.py
-  search_planner.py
-  server.py
-  storage.py
-benchmarks/
-  model_matrix.example.json
-  tasks/
-docs/
-  AS2_ARCHITECTURE.md
-  CAPSTONE_PLANNER_RESEARCH.md
-  PLANNER_BENCHMARKS.md
-frontend/
-  app.js
-  index.html
-  styles.css
-scripts/
-  start_backend.sh
-  start_frontend.sh
-tests/
-  test_as2_adapter.py
-  test_as2_runtime.py
-  test_benchmark.py
-  test_model_matrix.py
-  test_permissions.py
-  test_planner.py
-  test_search_planner.py
-  test_server.py
+backend/openclaw/             # AS2 planner runtime and benchmark harness
+benchmarks/                   # Planner benchmark tasks and model matrix config
+config/models.yaml            # Strategist router model tiers and thresholds
+data/                         # Sample router queries and committed benchmark evidence
+docs/                         # AS2 architecture and planner benchmark notes
+frontend/                     # Static planner console
+scripts/                      # Planner backend/frontend launchers
+src/                          # Strategist router MVP
+tests/                        # Planner and router tests
+demo.py                       # Strategist CLI demo
+run_server.py                 # Strategist API server
 ```
 
-## Test
+## Tests
+
+Planner / AS2 tests:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 ```
 
-## Roadmap To Full Capstone
+Strategist MVP test:
+
+```bash
+python3 -m pytest tests/test_mvp.py
+```
+
+## Roadmap
 
 1. Run the model matrix with real provider keys and compare model-backed candidate generation against deterministic fallback.
-2. Extend benchmark tasks with more repo-grounded and model-backed cases.
+2. Extend planner benchmark tasks with more repo-grounded and model-backed cases.
 3. Add LATS/MCTS-lite as a third planner strategy if it beats `audit_astar` under the same holdout protocol.
 4. Add progressive context injection using memory blocks, retrieval, and compaction.
-5. Publish head-to-head results as Markdown/JSON artifacts under an audit or benchmark output directory.
+5. Strengthen Strategist routing with feature-based, cost-aware, or cascade routing.

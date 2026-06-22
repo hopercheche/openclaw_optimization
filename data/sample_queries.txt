@@ -1,0 +1,7 @@
+"""Sample queries for benchmark testing."""
+
+今天天气怎么样？
+什么是机器学习？
+请解释为什么梯度下降在凸优化问题中能够收敛到全局最优。
+Compare and contrast supervised learning vs unsupervised learning.
+Prove that the square root of 2 is irrational.
