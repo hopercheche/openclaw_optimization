@@ -1,6 +1,6 @@
 # Planner Benchmark Notes
 
-Last updated: 2026-06-18
+Last updated: 2026-06-22
 
 ## Reliable External Benchmarks
 
@@ -47,7 +47,7 @@ Default command:
 Compare selected strategies:
 
 ```bash
-.venv/bin/python backend/openclaw/benchmark.py --strategies greedy_topk,audit_astar
+.venv/bin/python backend/openclaw/benchmark.py --strategies greedy_topk,audit_astar,audit_reflexion
 ```
 
 Use a fixed output directory:
@@ -104,6 +104,8 @@ Iteration stops when all of the following are true:
 - `audit_astar` has no safety/reliability regression: no higher invalid-tool, hallucinated-action, loop-failure, or unsafe-auto-allow counts.
 - `audit_astar` mean latency is at most 2x `greedy_topk`.
 
+`audit_reflexion` is evaluated in the same report as the current research variant. It is not the historical stop-criteria anchor yet, but it must preserve the same success and safety checks while adding auditable `reflection_*` events.
+
 ## Metrics
 
 | Metric | Meaning |
@@ -116,6 +118,7 @@ Iteration stops when all of the following are true:
 | unsafe_auto_allow_count | Forbidden tools that were automatically allowed. |
 | permission_intervention_count | ask/deny permission outcomes. |
 | search_event_count | Search trace density for optimized planners. |
+| reflection_event_count | Reflexion-style path-review trace density for reflective planners. |
 | model_event_count | AS2/model runtime event density. |
 | model_started_count | Number of benchmark runs that attempted a model call. |
 | model_result_count | Number of model calls that produced usable candidates. |
@@ -141,24 +144,26 @@ The current suite has 24 tasks across these families, split into 15 dev tasks an
 
 Latest run:
 
-- Report: `data/benchmarks/20260618T091019Z/report.md`
-- Metrics: `data/benchmarks/20260618T091019Z/metrics.json`
+- Report: `data/benchmarks/20260622T033223Z/report.md`
+- Metrics: `data/benchmarks/20260622T033223Z/metrics.json`
 - Task count: 24, split into 15 dev tasks and 9 holdout tasks
 - Repeats: 3
 - Stop criteria met: true
 
-| Strategy | Success rate | Mean score | Mean latency | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `audit_astar` | 100.00% | 1.0000 | 0.3255s | 0 | 0 | 0 | 0 |
-| `greedy_topk` | 20.83% | 0.7361 | 0.2833s | 0 | 0 | 0 | 0 |
+| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `audit_reflexion` | 100.00% | 1.0000 | 0.2932s | 97.0000 | 3.0000 | 0 | 0 | 0 | 0 |
+| `audit_astar` | 100.00% | 1.0000 | 0.3128s | 121.0000 | 0.0000 | 0 | 0 | 0 | 0 |
+| `greedy_topk` | 20.83% | 0.7361 | 0.2805s | 0.0000 | 0.0000 | 0 | 0 | 0 | 0 |
 
-The measured success delta is +79.17 percentage points, mean-score delta is +0.2639, and latency ratio is 1.1490x.
+The measured `audit_astar` stop-criteria delta remains +79.17 percentage points on success rate and +0.2639 on mean score. The latest latency ratio is 1.1152x. `audit_reflexion` matches `audit_astar` success and score while reducing mean search events from 121.0000 to 97.0000 and adding 3.0000 reflection events per run.
 
 Holdout split:
 
-| Strategy | Success rate | Mean score | Mean latency | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `audit_astar` | 100.00% | 1.0000 | 0.3470s | 0 | 0 | 0 | 0 |
-| `greedy_topk` | 33.33% | 0.7963 | 0.2823s | 0 | 0 | 0 | 0 |
+| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `audit_reflexion` | 100.00% | 1.0000 | 0.3091s | 97.0000 | 3.0000 | 0 | 0 | 0 | 0 |
+| `audit_astar` | 100.00% | 1.0000 | 0.3274s | 121.0000 | 0.0000 | 0 | 0 | 0 | 0 |
+| `greedy_topk` | 33.33% | 0.7963 | 0.2801s | 0.0000 | 0.0000 | 0 | 0 | 0 | 0 |
 
-Holdout success delta is +66.67 percentage points and holdout mean-score delta is +0.2037.
+Holdout success delta is +66.67 percentage points and holdout mean-score delta is +0.2037 for both optimized strategies against `greedy_topk`.

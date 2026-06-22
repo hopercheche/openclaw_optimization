@@ -1,6 +1,6 @@
 # Capstone Planner Direction Research
 
-Last updated: 2026-06-18
+Last updated: 2026-06-22
 
 ## Executive Conclusion
 
@@ -8,13 +8,14 @@ The strongest Capstone route for the current OpenClawPOpti codebase is an **audi
 
 1. Keep the current AS2/ReAct-backed candidate generator as the baseline.
 2. Compare the current greedy top-k selector with the implemented deterministic **A*-style best-first planner**.
-3. Add a **LATS/MCTS-lite planner** as the stretch variant if time allows.
-4. Evaluate Baseline vs Optimized on success rate, hallucinated actions, loop failures, invalid tool calls, permission interventions, latency, cost, and audit completeness.
+3. Use the implemented **Reflexion-style deterministic path repair** as the current research optimization layer.
+4. Add a true **LATS/MCTS-lite planner** only if it beats the reflective planner under the same holdout protocol.
+5. Evaluate Baseline vs Optimized on success rate, hallucinated actions, loop failures, invalid tool calls, permission interventions, latency, cost, and audit completeness.
 
 This path fits the repository because the code already has the essential planner substrate:
 
 - `backend/openclaw/planner.py`: bounded candidate generation, scoring, permission checks, critiques, event persistence.
-- `backend/openclaw/search_planner.py`: `greedy_topk` baseline selector and `audit_astar` optimized selector.
+- `backend/openclaw/search_planner.py`: `greedy_topk` baseline selector, `audit_astar` search selector, and `audit_reflexion` reflective selector.
 - `backend/openclaw/as2_runtime.py`: real AgentScope 2 Agent/Toolkit runtime for model-backed candidate generation.
 - `backend/openclaw/models.py`: `CandidateStep` and the current scoring formula.
 - `backend/openclaw/permissions.py`: allow/ask/deny gate for planner actions.
@@ -28,7 +29,7 @@ Can an explicit search planner improve an AgentScope-style tool agent over greed
 
 Concrete hypothesis:
 
-> Compared with the current top-k planner, an audit-aware A*/MCTS planner will reduce invalid tool calls, hallucinated actions, loop failures, and unsafe permission decisions on multi-step OpenClaw tasks, with an acceptable latency and token-cost increase.
+> Compared with the current top-k planner, an audit-aware search and reflection planner will reduce invalid tool calls, hallucinated actions, loop failures, and unsafe permission decisions on multi-step OpenClaw tasks, with an acceptable latency and token-cost increase.
 
 ## Current Baseline In This Repository
 
@@ -55,7 +56,7 @@ score = impact * 2 + evidence_value + reversibility - risk
 
 This is a **greedy ranking baseline**, not a full search planner. It evaluates candidate actions independently, then executes the top bounded set.
 
-The repository now also includes `audit_astar`, which performs bounded A*-style search over candidate tool/action paths. It is still not full LATS/MCTS: it does not run stochastic rollouts or backpropagate value estimates. It does maintain an explicit frontier, applies permission-aware path costs, evaluates evidence coverage, prunes repeated actions, and records `search_started`, `search_expand`, `search_score`, `search_prune`, and `search_selected` audit events.
+The repository now also includes `audit_astar`, which performs bounded A*-style search over candidate tool/action paths, and `audit_reflexion`, which starts from that A* path and applies deterministic Reflexion-style repair before execution. These are still not full LATS/MCTS: they do not run stochastic rollouts or backpropagate value estimates. They do maintain an explicit frontier, apply permission-aware path costs, evaluate evidence coverage, prune repeated actions, enforce safety/coverage bookends, and record `search_*` plus `reflection_*` audit events.
 
 ## Literature Map
 
@@ -68,6 +69,7 @@ The repository now also includes `audit_astar`, which performs bounded A*-style 
 | [RAP](https://arxiv.org/abs/2305.14992) | 2023-05 | Treat reasoning as planning with an LLM world model and MCTS | Planning, math, logical inference | Useful for simulation/rollout design, but heavier than A*. |
 | [LATS](https://arxiv.org/abs/2310.04406) | 2023-10 | MCTS plus LM value functions and self-reflection for agents | HumanEval, WebShop, QA, math | Best research reference for the stretch MCTS planner. |
 | [ToolChain*](https://arxiv.org/abs/2310.13227) | 2023-10 | A* search over tool-call decision trees | Tool-use and reasoning tasks | Best first implementation target because OpenClaw actions are tool-like. |
+| [AFlow](https://arxiv.org/abs/2410.10762) | 2024-10 | MCTS over executable agent workflows with execution feedback | Multiple LLM-agent benchmark tasks | Useful for treating planner optimization as workflow search with measurable feedback. |
 | [AgentBench](https://arxiv.org/abs/2308.03688) | 2023-08 | Multi-environment agent benchmark | 8 interactive environments | Good external benchmark reference; local harness can mirror its failure categories. |
 | [GAIA](https://arxiv.org/abs/2311.12983) | 2023-11 | General assistant tasks requiring reasoning and tools | Human-vs-agent gap | Good motivation for tool-use robustness. |
 | [tau-bench](https://arxiv.org/abs/2406.12045) | 2024-06 | Tool-agent-user interaction with policy rules and DB-state grading | pass^k reliability | Strong match for permission-policy and rule-following evaluation. |
@@ -99,9 +101,11 @@ Compared with the other directions:
 | --- | --- | --- | --- |
 | LATS official repo | <https://github.com/lapisrocks/LanguageAgentTreeSearch> | Use as design reference, do not vendor now | The repo is organized around HotPotQA, programming, and WebShop experiment scripts. The useful idea is MCTS plus value/reflection, but direct integration would bring task-specific prompts and external environments that do not match OpenClaw's audit runtime yet. |
 | Tree-of-Thought official repo | <https://github.com/princeton-nlp/tree-of-thought-llm> | Use as design reference, do not vendor now | The repo demonstrates BFS/DFS-style thought search for benchmark tasks. OpenClaw needs tool/action path search with permission events, so the abstraction must be adapted rather than copied. |
+| Self-Refine official repo | <https://github.com/madaan/self-refine> | Use as design reference, do not vendor now | The repo's generate-feedback-refine loop maps cleanly to OpenClaw trace repair, but the current planner only needs deterministic path review rather than full text regeneration. |
+| MetaGPT / AFlow codebase | <https://github.com/FoundationAgents/MetaGPT> | Use as design reference, do not vendor now | AFlow optimizes executable workflows with MCTS feedback; OpenClaw can reuse that evaluation framing without importing a separate multi-agent framework. |
 | ToolChain* paper | <https://arxiv.org/abs/2310.13227> | Implement local A*-style selector | This maps most directly to OpenClaw because each candidate is already a tool/action step and the project has local cost signals for risk, permission friction, evidence, and loops. |
 
-The current implementation therefore follows a "paper-to-local-architecture" route: borrow the search objective and planner vocabulary, but keep code local so the AS2 Toolkit, permission engine, audit persistence, and frontend event stream remain authoritative.
+The current implementation therefore follows a "paper-to-local-architecture" route: borrow search, reflection, and workflow-evaluation ideas, but keep code local so the AS2 Toolkit, permission engine, audit persistence, and frontend event stream remain authoritative.
 
 ## Recommended Planner Design
 
@@ -202,7 +206,30 @@ Stopping:
 - Frontier exhausted.
 - Permission gate blocks all useful paths.
 
-### Variant C: LATS/MCTS-Lite Planner
+### Variant C: Audit Reflexion Planner
+
+Name: `audit_reflexion`
+
+Status: implemented in `backend/openclaw/search_planner.py`.
+
+Why now:
+
+- It imports the most useful part of LATS/Reflexion/Self-Refine without requiring stochastic rollouts or extra model calls.
+- It keeps planner optimization auditable because every repair is written as `reflection_started`, `reflection_issue`, and `reflection_refined`.
+- It improves the action path as a structured object rather than editing hidden chain-of-thought.
+- It can run in deterministic fallback mode and AS2/model-backed mode.
+
+Repair rules:
+
+1. Run `audit_astar` first to get a bounded candidate path.
+2. If the goal explicitly says read-only or no writes, remove mutating steps.
+3. Insert safety bookends such as `risk_model` and `verifier` if missing.
+4. Ensure the desired tool family is covered for read-only, mutation, or production goals.
+5. Reorder the final path into a stable audit sequence and trim it to the step budget.
+
+This is the current best implementation balance: it keeps `audit_astar`'s search gains, adds transparent self-review, and avoids bringing in task-specific research repos.
+
+### Variant D: LATS/MCTS-Lite Planner
 
 Name: `audit_lats`
 
@@ -306,13 +333,14 @@ Benchmark variants:
 | `deterministic_topk` | current fallback candidates + top-k | No-key stable baseline. |
 | `as2_react_topk` | AS2 candidate generation + top-k | Current model-backed baseline. |
 | `audit_astar` | AS2/deterministic expansion + A* frontier | Main optimized planner. |
-| `audit_lats` | AS2/deterministic expansion + MCTS | Stretch optimized planner. |
+| `audit_reflexion` | A* path + deterministic reflection repair | Current research optimization layer. |
+| `audit_lats` | AS2/deterministic expansion + MCTS | Future stretch optimized planner. |
 
 Success target for the Capstone:
 
 - At least 20-30 benchmark tasks.
 - `audit_astar` improves hallucinated action rate, invalid tool-call rate, and loop failure rate over `as2_react_topk`.
-- `audit_astar` preserves or improves audit completeness.
+- `audit_reflexion` preserves `audit_astar` task success and safety while adding explicit reflection traces.
 - Added latency/cost is reported transparently rather than hidden.
 
 ## Implementation Milestones
@@ -335,15 +363,17 @@ Current protocol result:
 
 - 24 tasks: 15 dev and 9 holdout.
 - 3 repeats per strategy.
+- `audit_reflexion`: 100.00% success rate, 1.0000 mean score.
 - `audit_astar`: 100.00% success rate, 1.0000 mean score.
 - `greedy_topk`: 20.83% success rate, 0.7361 mean score.
 - Success delta: +79.17 percentage points.
 - Mean-score delta: +0.2639.
-- Latency ratio: 1.1490x.
+- Latency ratio: 1.1152x for `audit_astar` vs `greedy_topk`.
+- `audit_reflexion`: 97.0000 mean search events, 3.0000 mean reflection events, 0 invalid tools, 0 hallucinated actions, 0 loop failures, 0 unsafe auto-allows.
 - Holdout success delta: +66.67 percentage points.
 - Holdout mean-score delta: +0.2037.
 - Safety/reliability regression: none.
-- Evidence path: `data/benchmarks/20260618T091019Z/report.md`.
+- Evidence path: `data/benchmarks/20260622T033223Z/report.md`.
 - Model-matrix smoke path: `data/model_matrix/20260622T031111Z/matrix_report.md`.
 
 Next optimization direction:
@@ -360,6 +390,7 @@ Current implementation exposes selector-level strategy routing:
 
 - `greedy_topk`
 - `audit_astar`
+- `audit_reflexion`
 - per-run JSON field: `planner_strategy`
 - process default: `OPENCLAW_PLANNER_STRATEGY`
 
@@ -376,7 +407,18 @@ Implemented:
 
 This milestone is now the minimum publishable optimized planner substrate. It still needs benchmark evidence before the project should claim measured improvement.
 
-### Milestone 4: Implement MCTS/LATS-Lite
+### Milestone 4: Implement Deterministic Reflexion Repair
+
+Implemented:
+
+- `AuditReflexionPlannerStrategy`
+- A* path reuse
+- read-only mutation cleanup
+- risk/verifier safety bookends
+- desired-tool coverage repair
+- search trace plus reflection trace in the same audit stream
+
+### Milestone 5: Implement MCTS/LATS-Lite
 
 Add:
 
@@ -388,7 +430,7 @@ Add:
 
 This is the stretch route if the A* planner is already evaluated.
 
-### Milestone 5: Write Capstone Evidence
+### Milestone 6: Write Capstone Evidence
 
 Generate:
 
@@ -414,12 +456,11 @@ The final argument should be:
 
 ## Recommended Next Code Change
 
-Start with Milestone 1 benchmark evidence, not MCTS immediately.
+Run real AS2/model-backed comparisons before adding true MCTS.
 
 Reason:
 
-- The current planner now has named baseline and optimized selectors, but improvement is not credible until measured.
-- A benchmark harness makes every later change measurable.
-- The selector boundary lets future `audit_lats` share the same AS2 runtime, permissions, storage, and frontend.
-
-After that, implement `audit_lats` only if `audit_astar` gives a useful baseline. A* is currently the best balance of academic grounding, auditability, implementation effort, and Capstone defensibility.
+- The deterministic benchmark now shows `audit_reflexion` preserves 100.00% task success and adds auditable reflection events.
+- The remaining uncertainty is whether model-generated candidates improve or destabilize the selected tool paths.
+- Real provider runs should compare deterministic fallback, DeepSeek-compatible AS2 generation, and at least one additional OpenAI-compatible provider without storing secrets.
+- Only add `audit_lats` if model-backed tasks expose uncertainty that A* plus deterministic reflection cannot handle.

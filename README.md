@@ -2,8 +2,8 @@
 
 OpenClawPOpti contains Capstone work for OpenClaw agent optimization. The repository currently has two implemented tracks:
 
-- Direction 1, The Strategist: a rule-based model router MVP that routes requests to small / mid / large model tiers.
-- Direction 3, The Planner: an audit-first AgentScope 2 planner runtime with `greedy_topk` and `audit_astar` planner strategies plus benchmark evidence.
+- Direction 1, The Strategist: a rule-based model router that routes requests to small / mid / large model tiers.
+- Direction 3, The Planner: an audit-first AgentScope 2 planner runtime with `greedy_topk`, `audit_astar`, and `audit_reflexion` planner strategies plus benchmark evidence.
 
 It does not yet prove all three Capstone directions end to end. Direction 2, The Architect, is still only represented by context-boundary plumbing in the planner runtime.
 
@@ -13,14 +13,14 @@ It does not yet prove all three Capstone directions end to end. Direction 2, The
 | --- | --- | --- |
 | Baseline OpenClaw Agent | Partial | The deterministic fallback planner provides a stable baseline loop with fixed candidate generation, scoring, permission checks, and audit logs. |
 | Optimized OpenClaw Agent | Partial | The AS2-backed path embeds `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, `PermissionContext`, and `ReActConfig`; model-backed candidate generation is available when provider credentials are configured. |
-| Direction 1: model routing | Implemented MVP | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
+| Direction 1: model routing | Implemented | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
 | Direction 2: progressive context | Partially implemented boundary | The planner runtime has workspace-scoped tools and audit-safe context boundaries, but no retrieval, memory block, or compaction benchmark yet. |
-| Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search over candidate tool/action paths before permission-gated execution. Full LATS/MCTS remains a later extension. |
-| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk` and `audit_astar` on 24 tasks with dev/holdout splits. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
+| Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search; `audit_reflexion` adds deterministic reflection repair inspired by LATS, Reflexion, Self-Refine, ToolChain*, ToT, and AFlow. Full MCTS rollout/backpropagation remains a later extension. |
+| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk`, `audit_astar`, and `audit_reflexion` on 24 tasks with dev/holdout splits. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
 
-## Strategist Router MVP
+## Strategist Router
 
-The Strategist MVP routes user requests to a model tier before inference.
+The Strategist router routes user requests to a model tier before inference.
 
 ```text
 user input -> rule-based router -> small/mid/large model tier -> provider -> output + metrics
@@ -78,17 +78,18 @@ Planner strategies:
 
 - `greedy_topk`: baseline selector that ranks candidates independently by score.
 - `audit_astar`: optimized selector inspired by ToolChain*, Tree of Thoughts, and LATS. It searches candidate tool/action paths with explicit costs for risk, permission friction, repeated actions, and missing evidence, then records `search_*` events before execution.
+- `audit_reflexion`: reflective selector that starts from the A* path, then applies deterministic safety bookends, desired-tool coverage repair, explicit read-only cleanup, and `reflection_*` audit events.
 
-Enable `audit_astar` for backend runs:
+Enable `audit_reflexion` for backend runs:
 
 ```bash
-OPENCLAW_PLANNER_STRATEGY=audit_astar scripts/start_backend.sh
+OPENCLAW_PLANNER_STRATEGY=audit_reflexion scripts/start_backend.sh
 ```
 
 Or pass it per run:
 
 ```json
-{"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT","planner_strategy":"audit_astar"}
+{"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT","planner_strategy":"audit_reflexion"}
 ```
 
 ## Planner Benchmarks
@@ -122,11 +123,11 @@ The matrix config stores only non-secret model metadata and names of required en
 Latest planner benchmark evidence:
 
 ```text
-data/benchmarks/20260618T091019Z/report.md
-data/benchmarks/20260618T091019Z/metrics.json
+data/benchmarks/20260622T033223Z/report.md
+data/benchmarks/20260622T033223Z/metrics.json
 ```
 
-That run used 24 tasks with 3 repeats and met the stop criteria: `audit_astar` reached 100.00% success rate vs `greedy_topk` at 20.83%. The same run includes 15 dev tasks and 9 holdout tasks; on holdout, `audit_astar` reached 100.00% success rate vs `greedy_topk` at 33.33%.
+The latest run used 24 tasks with 3 repeats and met the stop criteria: `audit_reflexion` and `audit_astar` both reached 100.00% success rate vs `greedy_topk` at 20.83%. `audit_reflexion` recorded 3.0000 mean reflection events, 97.0000 mean search events, and 0 invalid tools, hallucinated actions, loop failures, or unsafe auto-allows. On holdout, `audit_reflexion` reached 100.00% success rate vs `greedy_topk` at 33.33%.
 
 Latest model-matrix smoke evidence:
 
@@ -198,7 +199,7 @@ data/                         # Sample router queries and committed benchmark ev
 docs/                         # AS2 architecture and planner benchmark notes
 frontend/                     # Static planner console
 scripts/                      # Planner backend/frontend launchers
-src/                          # Strategist router MVP
+src/                          # Strategist router
 tests/                        # Planner and router tests
 demo.py                       # Strategist CLI demo
 run_server.py                 # Strategist API server
@@ -212,7 +213,7 @@ Planner / AS2 tests:
 .venv/bin/python -m unittest discover -s tests
 ```
 
-Strategist MVP test:
+Strategist router test:
 
 ```bash
 python3 -m pytest tests/test_mvp.py
@@ -222,6 +223,6 @@ python3 -m pytest tests/test_mvp.py
 
 1. Run the model matrix with real provider keys and compare model-backed candidate generation against deterministic fallback.
 2. Extend planner benchmark tasks with more repo-grounded and model-backed cases.
-3. Add LATS/MCTS-lite as a third planner strategy if it beats `audit_astar` under the same holdout protocol.
+3. Add true LATS/MCTS rollout and backpropagation only if it improves over `audit_reflexion` under the same holdout protocol.
 4. Add progressive context injection using memory blocks, retrieval, and compaction.
 5. Strengthen Strategist routing with feature-based, cost-aware, or cascade routing.
