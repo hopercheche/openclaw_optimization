@@ -325,7 +325,10 @@ Deliverables:
 
 - `benchmarks/tasks/*.json`
 - `backend/openclaw/benchmark.py`
+- `backend/openclaw/model_matrix.py`
+- `benchmarks/model_matrix.example.json`
 - `data/benchmarks/.../metrics.json`
+- `data/model_matrix/.../matrix_metrics.json`
 - tests for benchmark scoring
 
 Current protocol result:
@@ -341,13 +344,15 @@ Current protocol result:
 - Holdout mean-score delta: +0.2037.
 - Safety/reliability regression: none.
 - Evidence path: `data/benchmarks/20260618T091019Z/report.md`.
+- Model-matrix smoke path: `data/model_matrix/20260622T031111Z/matrix_report.md`.
 
 Next optimization direction:
 
-- The benchmark harness now supports deterministic and AS2 runtime modes plus dev/holdout split reporting.
-- Next, add a model-matrix runner for AS2/provider-backed evaluations without storing secrets.
-- Compare deterministic fallback vs at least two OpenAI-compatible models if budget allows.
-- Track `model_event_count`, model fallback rate, parse/retry failures, latency ratio, and whether model-generated candidates increase or reduce permission interventions.
+- The benchmark harness supports deterministic and AS2 runtime modes plus dev/holdout split reporting.
+- The model-matrix runner now compares deterministic fallback with AS2/provider-backed entries without storing secrets.
+- The latest no-key smoke verifies required-env detection and model skip/fallback accounting; it does not measure provider quality.
+- Next, run the matrix with real provider keys for at least two OpenAI-compatible models if budget allows.
+- Track `model_started_count`, `model_result_count`, `model_fallback_count`, `model_skipped_count`, latency ratio, and whether model-generated candidates increase or reduce permission interventions.
 
 ### Milestone 2: Introduce Planner Selector Boundary
 

@@ -19,7 +19,7 @@ This repository contains part of the Capstone implementation. It does not yet sa
 | Direction 1: model routing | Not implemented yet | Provider selection is centralized in `as2_adapter.py`, so a RouteLLM/FrugalGPT-style router can be added, but no router or cost benchmark exists yet. |
 | Direction 2: progressive context | Partially implemented boundary | The runtime has workspace-scoped tools and audit-safe context boundaries, but it does not yet implement memory blocks, retrieval, compaction, or a just-in-time context benchmark. |
 | Direction 3: search planner | Partially implemented | The planner supports the original greedy top-k selector and an optional `audit_astar` selector that performs bounded A*-style search over candidate tool/action paths before permission-gated execution. Full LATS/MCTS remains a later extension. |
-| Head-to-head mathematical proof | Partially implemented | The local benchmark harness compares `greedy_topk` and `audit_astar` on 24 planner tasks with dev/holdout splits and 3-repeat evidence. It does not yet prove model-backed AS2 performance or the non-planner Capstone directions. |
+| Head-to-head mathematical proof | Partially implemented | The local benchmark harness compares `greedy_topk` and `audit_astar` on 24 planner tasks with dev/holdout splits and 3-repeat evidence. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
 | Modular OpenClaw upgrade | Partially implemented | Frontend/backend are decoupled, AS2 is behind an adapter/runtime layer, and every run persists `state.json`, `events.jsonl`, and `audit.md`. |
 
 In short: the architecture is suitable for continuing the Capstone implementation, especially if the selected focus is The Planner. It is not yet a complete proof that all three frontiers improve over a baseline.
@@ -151,6 +151,14 @@ To isolate the held-out task split:
 .venv/bin/python backend/openclaw/benchmark.py --split holdout --repeats 3
 ```
 
+To compare deterministic fallback against AS2/model-backed configurations without storing secrets:
+
+```bash
+.venv/bin/python backend/openclaw/model_matrix.py --config benchmarks/model_matrix.example.json --split holdout --repeats 1
+```
+
+The matrix config stores only non-secret model metadata and names of required env vars. API keys are read from the process environment at runtime and are never written to reports.
+
 It compares planner strategies such as `greedy_topk` and `audit_astar` on JSON tasks under `benchmarks/tasks/`, then writes:
 
 ```text
@@ -168,6 +176,15 @@ data/benchmarks/20260618T091019Z/metrics.json
 ```
 
 That run used 24 tasks with 3 repeats and met the stop criteria: `audit_astar` reached 100.00% success rate vs `greedy_topk` at 20.83%, with no invalid-tool, hallucinated-action, loop-failure, or unsafe-auto-allow regressions. The same run includes 15 dev tasks and 9 holdout tasks; on holdout, `audit_astar` reached 100.00% success rate vs `greedy_topk` at 33.33%.
+
+Latest model-matrix smoke evidence:
+
+```text
+data/model_matrix/20260622T031111Z/matrix_report.md
+data/model_matrix/20260622T031111Z/matrix_metrics.json
+```
+
+That smoke used the holdout split with no provider keys in the environment. It verifies matrix execution, required-env detection, and model skip/fallback accounting; it is not a real provider quality comparison.
 
 ## Install
 
@@ -261,13 +278,21 @@ backend/openclaw/
   as2_runtime.py
   as2_openai.py
   audit.py
+  benchmark.py
+  model_matrix.py
   models.py
   permissions.py
   planner.py
+  search_planner.py
   server.py
   storage.py
+benchmarks/
+  model_matrix.example.json
+  tasks/
 docs/
   AS2_ARCHITECTURE.md
+  CAPSTONE_PLANNER_RESEARCH.md
+  PLANNER_BENCHMARKS.md
 frontend/
   app.js
   index.html
@@ -278,8 +303,11 @@ scripts/
 tests/
   test_as2_adapter.py
   test_as2_runtime.py
+  test_benchmark.py
+  test_model_matrix.py
   test_permissions.py
   test_planner.py
+  test_search_planner.py
   test_server.py
 ```
 
@@ -291,8 +319,8 @@ tests/
 
 ## Roadmap To Full Capstone
 
-1. Extend benchmark tasks with more repo-grounded and model-backed cases.
-2. Add LATS/MCTS-lite as a third planner strategy if it beats `audit_astar` under the same holdout protocol.
-3. Add a model-routing layer inspired by RouteLLM or FrugalGPT.
+1. Run the model matrix with real provider keys and compare model-backed candidate generation against deterministic fallback.
+2. Extend benchmark tasks with more repo-grounded and model-backed cases.
+3. Add LATS/MCTS-lite as a third planner strategy if it beats `audit_astar` under the same holdout protocol.
 4. Add progressive context injection using memory blocks, retrieval, and compaction.
 5. Publish head-to-head results as Markdown/JSON artifacts under an audit or benchmark output directory.

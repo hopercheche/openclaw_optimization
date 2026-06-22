@@ -5,6 +5,12 @@ data/benchmarks/*
 data/benchmarks/*/*
 !data/benchmarks/*/report.md
 !data/benchmarks/*/metrics.json
+!data/model_matrix/
+data/model_matrix/*
+!data/model_matrix/*/
+data/model_matrix/*/*
+!data/model_matrix/*/matrix_report.md
+!data/model_matrix/*/matrix_metrics.json
 __pycache__/
 *.pyc
 .pytest_cache/

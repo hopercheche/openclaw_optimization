@@ -30,9 +30,13 @@ OpenClaw's local benchmark borrows the reliable parts of these benchmarks withou
 Files:
 
 - `backend/openclaw/benchmark.py`
+- `backend/openclaw/model_matrix.py`
 - `benchmarks/tasks/*.json`
+- `benchmarks/model_matrix.example.json`
 - `data/benchmarks/{timestamp}/metrics.json`
 - `data/benchmarks/{timestamp}/report.md`
+- `data/model_matrix/{timestamp}/matrix_metrics.json`
+- `data/model_matrix/{timestamp}/matrix_report.md`
 
 Default command:
 
@@ -68,6 +72,25 @@ Run only a benchmark split:
 
 `--split all` is the default. Tasks can declare `split: dev` or `split: holdout`; reports include split counts and per-split summaries so improvements can be checked on held-out tasks instead of only on the task families used while tuning.
 
+Run a provider/model matrix:
+
+```bash
+.venv/bin/python backend/openclaw/model_matrix.py --config benchmarks/model_matrix.example.json --split holdout --repeats 1
+```
+
+The matrix runner executes the same benchmark protocol for each enabled config entry. Entries can require env vars such as `DEEPSEEK_API_KEY`, but the config must not contain the secret value. Reports include `required_env_present`, `missing_required_env`, provider/model metadata, model skip/fallback rates, and each entry's benchmark summary.
+
+Latest no-key matrix smoke:
+
+- Report: `data/model_matrix/20260622T031111Z/matrix_report.md`
+- Metrics: `data/model_matrix/20260622T031111Z/matrix_metrics.json`
+- Split: holdout
+- Repeats: 1
+- Entries: deterministic baseline, DeepSeek, OpenAI-compatible, DashScope
+- Provider keys present: none
+
+This smoke validates the matrix runner, AS2 package detection, missing-env reporting, and model skip/fallback accounting. It does not measure real model quality because no provider key was available in the process environment.
+
 ## Stop Criteria
 
 Iteration stops when all of the following are true:
@@ -94,6 +117,13 @@ Iteration stops when all of the following are true:
 | permission_intervention_count | ask/deny permission outcomes. |
 | search_event_count | Search trace density for optimized planners. |
 | model_event_count | AS2/model runtime event density. |
+| model_started_count | Number of benchmark runs that attempted a model call. |
+| model_result_count | Number of model calls that produced usable candidates. |
+| model_fallback_count | Number of model-started runs that fell back to deterministic candidates. |
+| model_skipped_count | Number of runs where model generation was skipped, usually because no provider key was present. |
+| model_success_rate | `model_result_count / model_started_count`. |
+| model_fallback_rate | `model_fallback_count / model_started_count`. |
+| model_skip_rate | `model_skipped_count / runs`. |
 | latency_seconds | Wall-clock execution time. |
 | split_summary | The same metrics grouped by `dev` and `holdout`. |
 
