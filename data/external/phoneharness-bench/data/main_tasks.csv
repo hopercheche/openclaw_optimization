@@ -1,0 +1,125 @@
+task_uid,task_id,source_sheet,source_row,split,difficulty,scenario_category,raw_task_type,affordance_mode,cli_allowed,prompt,dimension_sequence
+120tasks30apps:MAIN_001,MAIN_001,120tasks30apps,4,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,"请帮我创建一个日历提醒，标题是""团队同步会议""，时间是本周五下午2点。",create_calendar_event
+120tasks30apps:MAIN_002,MAIN_002,120tasks30apps,5,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我给 MCPtest_fzy260404@163.com 发一封邮件，主题是hello world。,send_email_mcp
+120tasks30apps:MAIN_003,MAIN_003,120tasks30apps,6,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我新建一个联系人，名字是田中浩，电话是 1301231234。,gui(联系人)
+120tasks30apps:MAIN_004,MAIN_004,120tasks30apps,7,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我在地图上找一下最近的手工咖啡馆在哪里。,search_tencent_map
+120tasks30apps:MAIN_005,MAIN_005,120tasks30apps,8,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,我连不上 Wi-Fi，帮我打开 Wi-Fi 设置页面看看。,gui(设置)
+120tasks30apps:MAIN_006,MAIN_006,120tasks30apps,9,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我打开手电筒。,shell_exec
+120tasks30apps:MAIN_007,MAIN_007,120tasks30apps,10,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我把手电筒关掉。,shell_exec
+120tasks30apps:MAIN_008,MAIN_008,120tasks30apps,11,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查一下手机现在的电量、电池温度和充电状态。,get_battery_status
+120tasks30apps:MAIN_009,MAIN_009,120tasks30apps,12,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我把手机的媒体音量调到最大。,shell_exec
+120tasks30apps:MAIN_010,MAIN_010,120tasks30apps,13,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我把屏幕亮度调低一点，设置到128，省点电。,shell_exec
+120tasks30apps:MAIN_011,MAIN_011,120tasks30apps,14,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查一下这台手机支持哪些音频输出功能。,shell_exec
+120tasks30apps:MAIN_012,MAIN_012,120tasks30apps,15,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查一下最近10条通话记录，看看都有谁打过来。,shell_exec
+120tasks30apps:MAIN_013,MAIN_013,120tasks30apps,16,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我把手机里所有联系人的名字和电话号码列出来。,shell_exec
+120tasks30apps:MAIN_014,MAIN_014,120tasks30apps,17,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查看最近20条收件箱短信，看有没有快递通知或验证码。,shell_exec
+120tasks30apps:MAIN_015,MAIN_015,120tasks30apps,18,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查一下这部手机的设备信息，包括IMEI号码和当前使用的运营商。,shell_exec
+120tasks30apps:MAIN_016,MAIN_016,120tasks30apps,19,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我用后置摄像头拍一张照片保存到手机里。,take_photo
+120tasks30apps:MAIN_017,MAIN_017,120tasks30apps,20,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我播放手机里的 music.mp3 这首歌。,gui(音乐App)
+120tasks30apps:MAIN_018,MAIN_018,120tasks30apps,21,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,我刚从网上下载了一批图片，帮我扫描一下让它们显示在手机相册里。,shell_exec
+120tasks30apps:MAIN_019,MAIN_019,120tasks30apps,22,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我录制一段60秒的语音备忘，保存成 memo.m4a 文件。,shell_exec
+120tasks30apps:MAIN_020,MAIN_020,120tasks30apps,23,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查看一下手机上当前有哪些还没处理的通知消息。,shell_exec
+120tasks30apps:MAIN_021,MAIN_021,120tasks30apps,24,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我下载这个PDF文件到手机下载目录：https://arxiv.org/pdf/2303.08774。,shell_exec
+120tasks30apps:MAIN_022,MAIN_022,120tasks30apps,25,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我查一下当前连接的WiFi名称、IP地址和网速是多少。,get_wifi_info
+120tasks30apps:MAIN_023,MAIN_023,120tasks30apps,26,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我扫描一下附近都有哪些可以连的WiFi网络。,shell_exec
+120tasks30apps:MAIN_024,MAIN_024,120tasks30apps,27,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我用浏览器打开天气预报网站：https://www.weather.com.cn。,gui(浏览器)
+120tasks30apps:MAIN_025,MAIN_025,120tasks30apps,28,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,我在跑一个长时间任务，帮我开启唤醒锁防止手机休眠把它中断。,shell_exec
+120tasks30apps:MAIN_026,MAIN_026,120tasks30apps,29,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我把手机通讯录列表整理一下，发邮件到 MCPtest_fzy260404@163.com 备份。,shell_exec→send_email_mcp
+120tasks30apps:MAIN_027,MAIN_027,120tasks30apps,30,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我拍一张照片，然后把这张照片发邮件给 MCPtest_fzy260404@163.com。,take_photo→send_email_mcp
+120tasks30apps:MAIN_028,MAIN_028,120tasks30apps,31,main,medium,3. 办公学习,GUI/CLI,GUI or CLI alternative,True,帮我把上个月的项目营收数据：电商占45%、广告占30%、服务占25%，生成对应的饼图，然后发邮件给陈丽MCPtest_fzy260404@163.com,chart_pie→send_email_mcp
+120tasks30apps:MAIN_029,MAIN_029,120tasks30apps,32,main,hard,9. 银发用户/无障碍场景,GUI/CLI,GUI or CLI alternative,True,我每周三上午都要去社区医院测血压，你先帮我查查下周三会不会下雨啊，然后帮我设个每周三早上9点的提醒，顺便发个邮件告诉我闺女王丽MCPtest_fzy260404@163.com省得她老惦记我忘了去,websearch-text.prompt_search→create_calendar_event→send_email_mcp
+120tasks30apps:MAIN_030,MAIN_030,120tasks30apps,33,main,hard,10. 跨App工作流,GUI/CLI,GUI or CLI alternative,True,帮我看看今天微博热搜第一条是什么，去搜搜腾讯新闻对这件事的相关报道，把热搜话题和核心报道内容整理好发邮件给张丽MCPtest_fzy260404@163.com,search_weibo_hot→search_tencent_news→send_email_mcp
+120tasks30apps:MAIN_031,MAIN_031,120tasks30apps,34,main,easy,9. 银发用户/无障碍场景,GUI,GUI-primary,False,帮我把手机字体调大,gui(设置)
+120tasks30apps:MAIN_032,MAIN_032,120tasks30apps,35,main,easy,7. 日常查询,GUI/CLI,GUI or CLI alternative,True,帮我用计算器算一下368乘以12再减去479的结果是多少,gui(计算器)
+120tasks30apps:MAIN_033,MAIN_033,120tasks30apps,36,main,medium,11. 导航出行,GUI,GUI-primary,False,在百度地图中搜索离我最近的三甲医院，查看其详情（电话、营业时间、用户评分），然后规划一条从当前位置出发的步行路线，截图保存路线规划结果。,百度地图单App
+120tasks30apps:MAIN_034,MAIN_034,120tasks30apps,37,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,打开芒果TV，搜索综艺节目《乘风2024》，查看该节目的详情页（节目简介、嘉宾阵容、更新日期、总集数），浏览第一集的简介信息。,芒果TV单App
+120tasks30apps:MAIN_035,MAIN_035,120tasks30apps,38,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,"打开喜马拉雅，搜索""三体""有声书，选择播放次数最多的版本，查看专辑详情（总集数、播放量、主播信息），播放第1集并设置播放速度为1.5倍速。",喜马拉雅单App
+120tasks30apps:MAIN_036,MAIN_036,120tasks30apps,39,main,medium,4. 资讯阅读,GUI,GUI-primary,False,打开豆瓣，搜索电影《哪吒之魔童闹海》，查看该电影的详情页（评分、短评前5条内容、演职人员列表），浏览剧情简介和用户热门短评。,豆瓣单App
+120tasks30apps:MAIN_037,MAIN_037,120tasks30apps,40,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,打开58同城，在租房频道筛选整租房源，设置条件：2室、月租3000-5000元、地铁附近，找到一套满足条件的房源，查看详情页（面积、楼层、配套设施描述）。,58同城单App
+120tasks30apps:MAIN_038,MAIN_038,120tasks30apps,41,main,hard,3. 办公学习,GUI,GUI-primary,False,打开WPS，新建一个文字文档，输入标题2025年工作总结，在正文写三段话（每段不少于30字）概述工作亮点、挑战与展望，设置标题为二号黑体字，保存文件后发邮件给陈丽MCPtest_fzy260404@163.com。,WPS单App
+120tasks30apps:MAIN_039,MAIN_039,120tasks30apps,42,main,easy,3. 办公学习,GUI,GUI-primary,False,"打开手机系统日历，新建一个日程事件：标题为""项目周报评审""，时间设为明天上午10点，时长1小时，备注写上""需开启等候室""，保存事件。",腾讯会议单App
+120tasks30apps:MAIN_040,MAIN_040,120tasks30apps,43,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,打开自如App，搜索北京朝阳区的整租公寓，筛选条件：2居室、月租预算6000-10000元，选择一个房源，查看VR看房和房源详情（面积、楼层、配套）。,自如单App
+120tasks30apps:MAIN_041,MAIN_041,120tasks30apps,44,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,打开安居客，搜索上海浦东新区二手房，设置筛选：2室1厅、总价200-400万、有地铁，找到一套房源，查看户型图和小区配套信息。,安居客单App
+120tasks30apps:MAIN_042,MAIN_042,120tasks30apps,45,main,medium,4. 资讯阅读,GUI,GUI-primary,False,"打开知乎，搜索""人工智能对就业的影响""，找到热度最高的回答，阅读完整回答内容，浏览该回答下的精选评论。",知乎单App
+120tasks30apps:MAIN_043,MAIN_043,120tasks30apps,46,main,medium,3. 办公学习,GUI,GUI-primary,False,打开扫描全能王，对相册中的第一张图片进行扫描，扫描结果进行黑白处理，然后将其保存到手机相册。,扫描全能王单App
+120tasks30apps:MAIN_044,MAIN_044,120tasks30apps,47,main,medium,8. 拍照/相册处理,GUI,GUI-primary,False,打开美图秀秀，从相册选择一张人像照片，使用AI美颜功能进行磨皮和瘦脸处理（参数各调整到60以上），再添加一个滤镜，最后保存到相册。,美图秀秀单App
+120tasks30apps:MAIN_045,MAIN_045,120tasks30apps,48,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,打开贝壳找房，在新房频道搜索成都天府新区的楼盘，筛选均价1-2万每平方米的在售楼盘，选择一个楼盘查看户型图和周边配套信息。,贝壳找房单App
+120tasks30apps:MAIN_046,MAIN_046,120tasks30apps,49,main,medium,7. 日常查询,GUI,GUI-primary,False,"打开Keep，在课程库中搜索""HIIT燃脂训练""课程，选择一节时长20-30分钟的课程，查看课程详情（动作列表、预估消耗卡路里、难度等级），截图保存课程详情页。",Keep单App
+120tasks30apps:MAIN_047,MAIN_047,120tasks30apps,50,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,"打开得物，搜索""Nike Air Force 1""白色低帮款，按价格从低到高排序，找到一双尺码42的商品，查看其鉴别报告和卖家评价信息，截图保存商品详情页。",得物单App
+120tasks30apps:MAIN_048,MAIN_048,120tasks30apps,51,main,medium,11. 导航出行,GUI,GUI-primary,False,打开高德地图，搜索附近的高铁站，查看距离最近的高铁站名称和距离，规划一条从当前位置出发的驾车路线，查看预计行程时间和距离，截图保存路线规划结果。,滴滴出行单App
+120tasks30apps:MAIN_049,MAIN_049,120tasks30apps,52,main,medium,11. 导航出行,GUI,GUI-primary,False,打开高德地图，搜索附近5公里内评分4.5分以上的川菜餐厅，按照好评优先排序，查看排名第一的餐厅详情（菜单、评价、营业时间），然后规划从当前位置骑行前往的路线。,高德地图单App
+120tasks30apps:MAIN_050,MAIN_050,120tasks30apps,53,main,medium,4. 资讯阅读,GUI,GUI-primary,False,打开微博，进入热搜榜，找到排名前三的热点话题，进入其中一个话题页面，浏览热门微博内容，找到互动量最高的一条微博，截图保存该微博内容和评论区。,微博单App
+120tasks30apps:MAIN_051,MAIN_051,120tasks30apps,54,main,medium,6. 网购外卖/即时零售,GUI,GUI-primary,False,"打开什么值得买，搜索""蓝牙耳机""，按照好价排序，找到一款原价300元以上、折扣力度超过50%的商品，查看详情页的优惠说明和价格走势信息，截图保存商品详情。",什么值得买单App
+120tasks30apps:MAIN_052,MAIN_052,120tasks30apps,55,main,medium,11. 导航出行,GUI,GUI-primary,False,"打开腾讯地图，搜索""国家博物馆""，查看其开放时间、预约方式和周边停车场信息，规划一条从当前位置出发的公交路线，选择换乘次数最少的方案，截图保存路线规划结果。",腾讯地图单App
+120tasks30apps:MAIN_053,MAIN_053,120tasks30apps,56,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,打开腾讯视频，搜索电影《流浪地球2》，进入详情页查看演员表和幕后花絮信息，开始播放正片，将视频切换为横屏模式，查看音效设置选项，截图保存播放界面和详情页。,腾讯视频单App
+120tasks30apps:MAIN_054,MAIN_054,120tasks30apps,57,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,"打开QQ音乐，搜索歌手""周杰伦""，进入其歌手页面，按照播放量排序查看热门歌曲列表，找到播放量最高的歌曲，查看歌曲详情（歌词、专辑、评论数），截图保存歌手页面信息。",QQ音乐单App
+120tasks30apps:MAIN_055,MAIN_055,120tasks30apps,58,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,打开酷我音乐，进入排行榜，查看内地热歌榜前10名歌曲列表，选择第1名歌曲开始播放，查看歌词和歌曲详情（歌手、专辑、时长），截图保存排行榜和播放界面。,酷我音乐单App
+120tasks30apps:MAIN_056,MAIN_056,120tasks30apps,59,main,medium,4. 资讯阅读,GUI,GUI-primary,False,打开腾讯新闻，进入要闻频道，找到今日推荐的深度报道文章（长文），阅读文章核心内容，浏览文章下方的热门评论区，截图保存文章标题、正文摘要和热门评论。,腾讯新闻单App
+120tasks30apps:MAIN_057,MAIN_057,120tasks30apps,60,main,medium,12. AI App交互,GUI,GUI-primary,False,"打开QQ浏览器，搜索""2025年大模型行业发展趋势分析""，找到一篇专业分析文章，阅读其中关于行业发展的核心要点（至少5个），开启阅读模式浏览全文，截图保存文章核心内容。",元宝单App
+120tasks30apps:MAIN_058,MAIN_058,120tasks30apps,61,main,medium,2. 短视频/娱乐,GUI,GUI-primary,False,帮我在喜马拉雅里搜“郭德纲相声”，播放列表里的第一专辑，把播放速度调到 1.5 倍，顺便开启定时关闭设为 30 分钟。,喜马拉雅单App
+120tasks30apps:MAIN_059,MAIN_059,120tasks30apps,62,main,medium,3. 办公学习,GUI,GUI-primary,False,帮我在WPS里新建一个表格，表头写“日期、早餐、午餐、晚餐、饮水量”，填上4月7日这一行的数据“鸡蛋牛奶、牛肉饭、沙拉、1800ml”，再把首行加粗。,WPS单App
+120tasks30apps:MAIN_060,MAIN_060,120tasks30apps,63,main,medium,12. AI App交互,GUI,GUI-primary,False,"打开手机系统日历，新建一个每日重复的日程事件：标题写""喝水提醒""，时间设成每天下午15:00，备注写""记得喝300ml温水""，保存事件并截图确认。",元宝单App
+120tasks30apps:MAIN_061,MAIN_061,120tasks30apps,64,main,medium,7. 日常查询,GUI,GUI-primary,False,"打开Keep，搜索""睡前拉伸 15分钟""，打开第一套课程查看课程详情（动作说明、时长、难度），截图保存课程信息，然后在手机闹钟中设置每天22:00的运动提醒。",Keep单App
+120tasks30apps:MAIN_062,MAIN_062,120tasks30apps,65,main,medium,3. 办公学习,GUI,GUI-primary,False,"打开WPS，新建一个表格，第一行填""事项、负责人、截止时间""，第二行填""原型确认、小林、4月9日18:00""，再把整张表开启筛选功能。",腾讯文档单App
+120tasks30apps:MAIN_063,MAIN_063,120tasks30apps,66,main,hard,10. 跨App工作流,GUI,GUI-primary,False,"打开QQ浏览器搜索""今天状态很好 正能量文案""，找到一条合适的文案，将文案内容整理到WPS文档中保存。",元宝→微博
+120tasks30apps:MAIN_064,MAIN_064,120tasks30apps,67,main,hard,10. 跨App工作流,GUI,GUI-primary,False,"去酷我音乐找""通勤歌单""，把前两首歌名记下来，整理到WPS文档里保存。",酷我音乐→腾讯文档
+120tasks30apps:MAIN_065,MAIN_065,120tasks30apps,68,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去爱奇艺搜《漫长的季节》，记下导演名字，再去豆瓣看看评分。,爱奇艺→豆瓣
+120tasks30apps:MAIN_066,MAIN_066,120tasks30apps,69,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在腾讯视频搜热播古装剧第一部，把剧名拿去腾讯新闻搜一下最新报道。,腾讯视频→腾讯新闻
+120tasks30apps:MAIN_067,MAIN_067,120tasks30apps,70,main,hard,10. 跨App工作流,GUI,GUI-primary,False,"去喜马拉雅搜""睡前冥想 10分钟""，把标题记下来，整理到WPS新建的文档《助眠清单》里保存。",喜马拉雅→腾讯文档
+120tasks30apps:MAIN_068,MAIN_068,120tasks30apps,71,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在keep搜“15分钟燃脂”，看看消耗多少千卡，再去QQ音乐放一张跑步歌单。,Keep→QQ音乐
+120tasks30apps:MAIN_069,MAIN_069,120tasks30apps,72,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去豆瓣搜《置身事内》，记下书名和作者，然后去QQ浏览器搜索这本书的详细介绍和读者评价，截图保存。,豆瓣→微信读书
+120tasks30apps:MAIN_070,MAIN_070,120tasks30apps,73,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去腾讯视频搜《庆余年》，记下前两个主演名字，再去微博搜对应话题。,腾讯视频→微博
+120tasks30apps:MAIN_071,MAIN_071,120tasks30apps,74,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在知乎搜“租房避坑”，把前两条建议整理到WPS里存一下。,知乎→WPS
+120tasks30apps:MAIN_072,MAIN_072,120tasks30apps,75,main,hard,10. 跨App工作流,GUI,GUI-primary,False,打开QQ浏览器搜索《长安的荔枝》的简介信息，将简介第一句话复制到WPS文档中保存。,微信读书→微博
+120tasks30apps:MAIN_073,MAIN_073,120tasks30apps,76,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去腾讯新闻看今天财经头条，把标题复制下来，去QQ浏览器搜索该新闻的通俗解读文章，将解读内容截图并整理到WPS文档里保存。,腾讯新闻→元宝→腾讯文档
+120tasks30apps:MAIN_074,MAIN_074,120tasks30apps,77,main,hard,10. 跨App工作流,GUI,GUI-primary,False,帮我在安居客搜“广州 珠江新城 一居室”，把小区名拿去豆瓣搜有没有避雷帖。,安居客→豆瓣
+120tasks30apps:MAIN_075,MAIN_075,120tasks30apps,78,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去QQ浏览器搜“本周科技新品”，把第一条产品名拿去什么值得买看价格。,QQ浏览器→什么值得买
+120tasks30apps:MAIN_076,MAIN_076,120tasks30apps,79,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去QQ音乐搜“City Pop”，把第一张歌单名拿去美图秀秀做一张封面图。,QQ音乐→美图秀秀
+120tasks30apps:MAIN_077,MAIN_077,120tasks30apps,80,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在腾讯新闻搜“新能源车”，把第一篇标题拿去微博搜同话题，看看讨论多不多。,腾讯新闻→微博
+120tasks30apps:MAIN_078,MAIN_078,120tasks30apps,81,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去自如搜“杭州 合租”，把价格最低那套的小区名拿去百度地图看离西湖多远。,自如→百度地图
+120tasks30apps:MAIN_079,MAIN_079,120tasks30apps,82,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在keep搜“肩颈放松”，记下课程名，再去喜马拉雅找个10分钟白噪音一起放。,Keep→喜马拉雅
+120tasks30apps:MAIN_080,MAIN_080,120tasks30apps,83,main,hard,10. 跨App工作流,GUI,GUI-primary,False,"打开QQ浏览器搜索""请假条模板""，找到一个合适的模板，将模板内容复制到WPS里新建的Word文档中，根据模板填写请假信息后保存。",元宝→腾讯文档
+120tasks30apps:MAIN_081,MAIN_081,120tasks30apps,84,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去知乎搜一下怎么做红烧肉，把点赞最高的步骤截个图放到美图秀秀里加个滤镜。,知乎→美图秀秀
+120tasks30apps:MAIN_082,MAIN_082,120tasks30apps,85,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去58同城看下附近有没有修空调的，把电话号码复制到WPS备忘录文档里保存。,58同城→腾讯文档
+120tasks30apps:MAIN_083,MAIN_083,120tasks30apps,86,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去微博热搜榜看下第一名是什么，进入该话题页面浏览热门讨论内容，截图保存热搜话题和热门评论。,微博→元宝
+120tasks30apps:MAIN_084,MAIN_084,120tasks30apps,87,main,hard,10. 跨App工作流,GUI,GUI-primary,False,去腾讯新闻看下今天股市行情，截图保存行情数据页面，然后去QQ浏览器搜索今日股市简评，截图保存分析内容。,腾讯新闻→元宝
+120tasks30apps:MAIN_085,MAIN_085,120tasks30apps,88,main,hard,10. 跨App工作流,GUI,GUI-primary,False,在58同城搜一下同城搬家，把前两家的报价记到WPS表格里对比一下。,58同城→WPS
+120tasks30apps:MAIN_086,MAIN_086,120tasks30apps,89,main,easy,1. 系统快捷操作,GUI/CLI,GUI or CLI alternative,True,帮我设置一个明天早上7点半的闹钟，提醒我赶高铁,gui(时钟)
+120tasks30apps:MAIN_087,MAIN_087,120tasks30apps,90,main,medium,11. 导航出行,GUI/CLI,GUI or CLI alternative,True,帮我在腾讯地图上搜下附近的公共厕所，规划最近的步行路线,腾讯地图单App
+120tasks30apps:MAIN_088,MAIN_088,120tasks30apps,91,main,medium,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,打开爱奇艺看看最近上新的高分纪录片有哪些，选第一个评分最高的，帮我上网查查它的拍摄背景资料,爱奇艺→websearch-text.prompt_search
+120tasks30apps:MAIN_089,MAIN_089,120tasks30apps,92,main,medium,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,帮我打开美团看看正在热播的院线电影有哪些，找一部评分最高的，上网查查它的豆瓣评分是多少,gui(美团)→websearch-text.prompt_search
+120tasks30apps:MAIN_090,MAIN_090,120tasks30apps,93,main,medium,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,打开腾讯视频，找到《仙逆》的更新时间，帮我把更新提醒加到手机日历里,腾讯视频→create_calendar_event
+120tasks30apps:MAIN_091,MAIN_091,120tasks30apps,94,main,medium,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,帮我在B站搜一下红烧肉的家常做法视频，找到播放量最高的那个，把视频标题和UP主名字截图发邮件给李刚MCPtest_fzy260404@163.com,gui(B站)→send_email_mcp
+120tasks30apps:MAIN_092,MAIN_092,120tasks30apps,95,main,hard,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,帮我在酷我音乐里搜索适合运动时听的DJ歌单，找到播放量最高的那个，查看歌单内的前3首歌曲名称和歌手信息，截图保存歌单详情页，然后将歌曲信息截图发邮件给周明MCPtest_fzy260404@163.com,酷我音乐→send_email_mcp
+120tasks30apps:MAIN_093,MAIN_093,120tasks30apps,96,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,"打开手机系统日历，新建一个日程事件：标题为""产品评审会""，时间设为明天下午两点半，时长1小时，备注填写会议相关信息，保存事件后将日程详情截图发邮件给同事MCPtest_fzy260404@163.com",腾讯会议→create_calendar_event→send_email_mcp
+120tasks30apps:MAIN_094,MAIN_094,120tasks30apps,97,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,帮我在QQ浏览器搜索arXiv上最新发布的3篇多模态大模型相关的核心论文，把它们的标题和摘要要点整理到WPS里新建的「AI技术调研」Word文档中保存,search_arxiv→腾讯文档
+120tasks30apps:MAIN_095,MAIN_095,120tasks30apps,98,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,帮我把手机里存的三个项目阶段报告PDF合并成一个完整的文件，打开WPS检查下合并后的格式有没有错乱，没问题的话发邮件给李经理MCPtest_fzy260404@163.com,pdf_merge→WPS→send_email_mcp
+120tasks30apps:MAIN_096,MAIN_096,120tasks30apps,99,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,帮我在微博上搜一下最近关于世界人工智能大会的相关内容，找到转发量最高的3条动态，把每条的内容和发布者信息整理好做成Excel表格，把表格作为附件发邮件给曹总MCPtest_fzy260404@163.com,微博→xlsx_create→send_email_mcp
+120tasks30apps:MAIN_097,MAIN_097,120tasks30apps,100,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,打开手机系统日历，新建一个即时会议日程事件，填写会议主题和时间信息，保存后将日程详情截图发邮件告诉吴磊MCPtest_fzy260404@163.com,腾讯会议→send_email_mcp
+120tasks30apps:MAIN_098,MAIN_098,120tasks30apps,101,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,帮我打开腾讯新闻看看今天的科技板块头条，把里面提到的AI大模型相关消息再搜下有没有最新进展，整理好发邮件给王浩MCPtest_fzy260404@163.com,腾讯新闻→websearch-text.prompt_search→send_email_mcp
+120tasks30apps:MAIN_099,MAIN_099,120tasks30apps,102,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,帮我在知乎搜下考研英语的备考技巧，找点赞最高的3个回答，把核心要点整理成Word文档存到我手机里,知乎→docx_create
+120tasks30apps:MAIN_100,MAIN_100,120tasks30apps,103,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,帮我在小红书搜下北京端午游玩的攻略，找到点赞最高的那篇笔记，把内容截个图发邮件给张婷MCPtest_fzy260404@163.com,gui(小红书)→send_email_mcp
+120tasks30apps:MAIN_101,MAIN_101,120tasks30apps,104,main,hard,5. 移动支付/金融理财,GUI/+CLI,GUI-primary + optional CLI,True,帮我在小红书上看看近期的足金首饰团购优惠价，再查下今天的国际黄金现货价格，把两者的对比结果发邮件告诉陈丽MCPtest_fzy260404@163.com,gui(小红书)→websearch-text.prompt_search→send_email_mcp
+120tasks30apps:MAIN_102,MAIN_102,120tasks30apps,105,main,hard,6. 网购外卖/即时零售,GUI/+CLI,GUI-primary + optional CLI,True,帮我在安居客上搜杭州西湖区附近2500元以内的整租房源，把符合条件的前三个房源信息记录下来，再上网查查这个区域的平均租金是多少,安居客→websearch-text.prompt_search
+120tasks30apps:MAIN_103,MAIN_103,120tasks30apps,106,main,hard,7. 日常查询,GUI/+CLI,GUI-primary + optional CLI,True,"帮我打开QQ浏览器搜索""2026年中秋节放假安排""，找到官方公布的放假时间信息，把相关内容发邮件给陈丽MCPtest_fzy260404@163.com",元宝→send_email_mcp
+120tasks30apps:MAIN_104,MAIN_104,120tasks30apps,107,main,hard,10. 跨App工作流,GUI/+CLI,GUI-primary + optional CLI,True,我刚才在什么值得买看到索尼WF-1000XM5的推荐，帮我去知乎看看这款耳机的真实测评，再找找我家附近的索尼线下体验店地址，把测评要点和地址截图整理到Word文档中,知乎→search_tencent_map→docx_create
+120tasks30apps:MAIN_105,MAIN_105,120tasks30apps,108,main,hard,10. 跨App工作流,GUI/+CLI,GUI-primary + optional CLI,True,帮我在喜马拉雅上搜索讲故宫历史的播客，找到播放量最高的那一集的介绍文案，再查下故宫的基本历史背景，把这两部分内容整合起来做成Word文档发给张伟MCPtest_fzy260404@163.com,喜马拉雅→websearch-text.prompt_search→docx_create→send_email_mcp
+120tasks30apps:MAIN_106,MAIN_106,120tasks30apps,109,main,hard,10. 跨App工作流,GUI/+CLI,GUI-primary + optional CLI,True,帮我在喜马拉雅找到《三体》的有声小说，找到第12集开始播放，然后在手机日历中创建一个明天晚上8点继续收听的提醒事件,喜马拉雅→create_calendar_event
+120tasks30apps:MAIN_107,MAIN_107,120tasks30apps,110,main,hard,10. 跨App工作流,GUI/+CLI,GUI-primary + optional CLI,True,帮我打开安居客，搜索广州天河区珠江新城的两居室租房源，统计前10个房源的平均租金，把统计结果生成柱状图，发邮件给王强MCPtest_fzy260404@163.com,安居客→chart_bar→send_email_mcp
+120tasks30apps:MAIN_108,MAIN_108,120tasks30apps,111,main,hard,10. 跨App工作流,GUI/+CLI,GUI-primary + optional CLI,True,帮我打开自如APP，搜索深圳南山区科技园附近的合租房源，筛选出月租金1800元以内带阳台的房间，把符合条件的第一个房源详情页截图，发邮件给刘芳MCPtest_fzy260404@163.com告诉她帮我看看这个房子,自如→qrcode_generate→send_email_mcp
+120tasks30apps:MAIN_109,MAIN_109,120tasks30apps,112,main,hard,11. 导航出行,GUI/+CLI,GUI-primary + optional CLI,True,帮我获取当前的位置，然后搜下我附近最近的地铁站，把地铁站的名称和步行需要的时间发邮件告诉冯坤MCPtest_fzy260404@163.com,get_location→search_tencent_map→send_email_mcp
+120tasks30apps:MAIN_110,MAIN_110,120tasks30apps,113,main,hard,12. AI App交互,GUI/+CLI,GUI-primary + optional CLI,True,"帮我打开QQ浏览器，搜索""适合10人参与的周末团建活动方案""，找到一篇详细的方案推荐文章，将方案核心内容截图后发邮件给陈丽MCPtest_fzy260404@163.com",元宝→send_email_mcp
+120tasks30apps:MAIN_111,MAIN_111,120tasks30apps,114,main,hard,13. AI App交互-多轮,GUI/+CLI,GUI-primary + optional CLI,True,"帮我打开QQ浏览器，先搜索""考研和考公各自的优缺点对比""，找到一篇详细的分析文章截图保存，再搜索""考研考公备考时间规划建议""，找到相关规划内容截图保存，把两次搜索的核心内容整理成一个WPS Word文档保存",元宝→docx_create
+120tasks30apps:MAIN_112,MAIN_112,120tasks30apps,115,main,hard,2. 短视频/娱乐,GUI/+CLI,GUI-primary + optional CLI,True,打开腾讯视频，找到《庆余年第三季》的开播日期和每周更新时间，在手机日历里帮我创建一个开播当天晚上8点的追剧提醒，以后每周固定时间也设好提醒，备注里写上剧名。,腾讯视频→create_calendar_event
+120tasks30apps:MAIN_113,MAIN_113,120tasks30apps,116,main,hard,11. 导航出行,GUI/+CLI,GUI-primary + optional CLI,True,帮我获取当前所在位置，在高德地图上搜索最近的高铁站，查看从当前位置驾车前往的预估时间和距离，然后在手机日历里创建明天早上6点的出发提醒，备注里填上预估行程时间。,get_location→滴滴出行→create_calendar_event
+120tasks30apps:MAIN_114,MAIN_114,120tasks30apps,117,main,hard,11. 导航出行,GUI/+CLI,GUI-primary + optional CLI,True,帮我获取当前位置，在高德地图上查找周边500米内评分最高的咖啡馆，把店名、地址和步行时间整理好，发邮件告诉朋友 MCPtest_fzy260404@163.com 说好在这里碰面。,get_location→高德地图→send_email_mcp
+120tasks30apps:MAIN_115,MAIN_115,120tasks30apps,118,main,hard,6. 网购外卖/即时零售,GUI/+CLI,GUI-primary + optional CLI,True,帮我在得物上搜索Nike AJ1黑白熊猫配色的球鞋，找到价格最低的在售鞋码42，查看商品详情页（价格、鉴别信息），把商品详情发邮件给朋友 MCPtest_fzy260404@163.com，让他帮我看看值不值得入手。,得物→qrcode_generate→send_email_mcp
+120tasks30apps:MAIN_116,MAIN_116,120tasks30apps,119,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,帮我在豆瓣上查看2025年度高分电影榜单，把评分在8.5以上的前5部电影的片名、导演、评分和类型整理成一个Excel表格，发邮件给朋友 MCPtest_fzy260404@163.com 一起讨论周末看哪部。,豆瓣→xlsx_create→send_email_mcp
+120tasks30apps:MAIN_117,MAIN_117,120tasks30apps,120,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,打开QQ浏览器，搜索《原则》这本书的章节目录和阅读指南，估算全书的章节数量，按每天晚上阅读30分钟的节奏计算大约需要多少天读完，在手机日历里设置每天晚上9点的阅读提醒，持续到预计读完为止。,微信读书→create_calendar_event
+120tasks30apps:MAIN_118,MAIN_118,120tasks30apps,121,main,hard,8. 拍照/相册处理,GUI/+CLI,GUI-primary + optional CLI,True,打开扫描全能王，扫描一张纸质合同文件，对扫描结果进行自动裁剪和增强，导出为图片后对图片进行压缩处理使文件小于1MB，最后把压缩后的合同图片作为附件发邮件给对方 MCPtest_fzy260404@163.com。,扫描全能王→image_compress→send_email_mcp
+120tasks30apps:MAIN_119,MAIN_119,120tasks30apps,122,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,帮我在腾讯新闻搜索最近国内各大手机品牌第一季度的销量报道，找到华为、小米、苹果、OPPO、vivo各自的出货量数据，生成一张柱状图对比，发邮件给同事 MCPtest_fzy260404@163.com 让他参考一下。,腾讯新闻→chart_bar→send_email_mcp
+120tasks30apps:MAIN_120,MAIN_120,120tasks30apps,123,main,hard,6. 网购外卖/即时零售,GUI/+CLI,GUI-primary + optional CLI,True,帮我获取当前位置，在贝壳找房上搜索周边5公里内总价300万以内的2居室二手房，找一套满意的房源，再在地图上查询从这套房子步行到最近地铁站需要几分钟，把查询结果一起告诉我。,get_location→贝壳找房→search_tencent_map
+120tasks30apps:MAIN_121,MAIN_121,120tasks30apps,124,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,"打开手机系统日历，新建一个日程事件：标题为""部门周例会""，时间设为后天下午3点，时长1小时，备注填写会议相关信息，保存事件后将会议时间和详情发邮件通知全组成员 MCPtest_fzy260404@163.com，邮件里附上会议时间和议程。",腾讯会议→create_calendar_event→send_email_mcp
+120tasks30apps:MAIN_122,MAIN_122,120tasks30apps,125,main,hard,4. 资讯阅读,GUI/+CLI,GUI-primary + optional CLI,True,打开QQ浏览器搜索2025国庆黄金周最值得去的10个小众目的地，找一篇内容最详细的攻略，把其中的景点推荐（含简介）、最佳游览时间和注意事项整理成一份Word旅行攻略文档，保存到手机存储。,QQ浏览器→docx_create
+120tasks30apps:MAIN_123,MAIN_123,120tasks30apps,126,main,hard,8. 拍照/相册处理,GUI/+CLI,GUI-primary + optional CLI,True,打开美图秀秀，从相册选一张最近的合照，用AI美颜优化一下，加上一个好看的边框，然后把图片压缩到500KB以内，发邮件把这张照片分享给朋友 MCPtest_fzy260404@163.com。,美图秀秀→image_compress→send_email_mcp
+120tasks30apps:MAIN_124,MAIN_124,120tasks30apps,127,main,hard,3. 办公学习,GUI/+CLI,GUI-primary + optional CLI,True,帮我在WPS里新建一份本周工作日报Word文档，写好今天的工作内容摘要（三条），顺便检查一下手机当前电量，在文档末尾备注一下当前设备电量百分比，最后把文档发邮件给上级 MCPtest_fzy260404@163.com。,WPS→get_battery_status→send_email_mcp

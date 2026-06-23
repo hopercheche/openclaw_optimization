@@ -1,4 +1,7 @@
 data/*
+!data/external/
+data/external/*
+!data/external/**
 !data/benchmarks/
 data/benchmarks/*
 !data/benchmarks/*/
@@ -11,7 +14,14 @@ data/model_matrix/*
 data/model_matrix/*/*
 !data/model_matrix/*/matrix_report.md
 !data/model_matrix/*/matrix_metrics.json
+!data/planner_models/
+data/planner_models/*
+!data/planner_models/*.json
+!data/planner_models/*.md
 __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+.env
+.env.*
+!.env.example
