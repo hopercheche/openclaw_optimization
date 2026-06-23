@@ -16,7 +16,7 @@ It does not yet prove all three Capstone directions end to end. Direction 2, The
 | Direction 1: model routing | Implemented | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
 | Direction 2: progressive context | Partially implemented boundary | The planner runtime has workspace-scoped tools and audit-safe context boundaries, but no retrieval, memory block, or compaction benchmark yet. |
 | Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search; `audit_reflexion` adds deterministic reflection repair inspired by LATS, Reflexion, Self-Refine, ToolChain*, ToT, and AFlow. Full MCTS rollout/backpropagation remains a later extension. |
-| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk`, `audit_astar`, and `audit_reflexion` on 24 tasks with dev/holdout splits. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
+| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk`, `audit_astar`, and `audit_reflexion` on 88 tasks with dev/holdout splits, including converted PhoneHarness tasks plus a multi-source generalization suite from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
 
 ## Strategist Router
 
@@ -120,14 +120,44 @@ Run the provider/model matrix without storing secrets:
 
 The matrix config stores only non-secret model metadata and names of required env vars. API keys are read from the process environment at runtime and are never written to reports.
 
+Regenerate the converted PhoneHarness task suite:
+
+```bash
+.venv/bin/python scripts/convert_phoneharness_dataset.py --main-limit 18 --safety-limit 12
+```
+
+Build the multi-source planner generalization suite from the downloaded planner datasets:
+
+```bash
+.venv/bin/python scripts/build_planner_generalization_suite.py
+```
+
+That suite normalizes PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench into shared planner features: `source_family`, `planner_profile`, `execution_tools`, and `policy_mode`.
+
+Train the lightweight planner profile model from the downloaded datasets:
+
+```bash
+.venv/bin/python scripts/train_planner_profile_model.py
+```
+
+The trained model is saved to `data/planner_models/profile_policy_model.json`; its report is `data/planner_models/profile_policy_report.md`. It learns planner profile, execution-tool set, and policy mode from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench, then acts as a conservative hint when a new task has no explicit `execution_tool(s)=...` metadata.
+
 Latest planner benchmark evidence:
 
 ```text
-data/benchmarks/20260622T033223Z/report.md
-data/benchmarks/20260622T033223Z/metrics.json
+data/benchmarks/20260622T144217Z/report.md
+data/benchmarks/20260622T144217Z/metrics.json
 ```
 
-The latest run used 24 tasks with 3 repeats and met the stop criteria: `audit_reflexion` and `audit_astar` both reached 100.00% success rate vs `greedy_topk` at 20.83%. `audit_reflexion` recorded 3.0000 mean reflection events, 97.0000 mean search events, and 0 invalid tools, hallucinated actions, loop failures, or unsafe auto-allows. On holdout, `audit_reflexion` reached 100.00% success rate vs `greedy_topk` at 33.33%.
+The latest run used 88 tasks with 3 repeats and met the stop criteria: `audit_astar` and `audit_reflexion` both reached 100.00% success rate vs `greedy_topk` at 5.68%. The profile-aligned shortcut and learned profile model preserve audit events: `audit_astar` recorded 38.5909 mean search events, and `audit_reflexion` recorded 32.0455 mean search events plus 4.5000 mean reflection events, with 0 invalid tools, hallucinated actions, loop failures, or unsafe auto-allows. On holdout, both optimized strategies reached 100.00% success rate vs `greedy_topk` at 11.11%.
+
+No-hint generalization smoke:
+
+```text
+/tmp/openclaw_stripped_with_model/metrics.json
+```
+
+This smoke strips explicit profile metadata from the 34-task multi-source generalization suite. With the trained profile model enabled, `audit_astar` reached 97.06% overall success and 100.00% holdout success; with the model disabled, the same stripped suite reached 5.88% in the earlier control run.
 
 Latest model-matrix smoke evidence:
 
@@ -147,6 +177,8 @@ DeepSeek OpenAI-compatible runtime:
 ```bash
 DEEPSEEK_API_KEY=... scripts/start_backend.sh
 ```
+
+For local development, `scripts/start_backend.sh` automatically loads `.env.local` when present. `.env.local` is ignored by git and should contain secrets only on the local machine.
 
 Optional model override:
 
