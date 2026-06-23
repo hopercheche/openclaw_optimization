@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -15,6 +16,17 @@ from openclaw.storage import RunStorage
 
 
 class SearchPlannerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._env_patch = patch.dict(
+            "os.environ",
+            {"OPENCLAW_DISABLE_PLANNER_PROFILE_MODEL": "1"},
+            clear=False,
+        )
+        self._env_patch.start()
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+
     def test_audit_astar_emits_search_trace_and_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             storage = RunStorage(Path(temp_dir))
@@ -129,6 +141,126 @@ class SearchPlannerTest(unittest.TestCase):
             )
             self.assertNotIn("file_writer", selected_tools)
             self.assertNotIn("command_runner", selected_tools)
+
+    def test_reflexion_uses_profile_aligned_shortcut_for_policy_tool_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = RunStorage(Path(temp_dir))
+            state = RunState(
+                run_id=new_run_id(),
+                goal=(
+                    "Multi-source planner profile "
+                    "[source_family=tau2; planner_profile=policy_tool_agent; "
+                    "safety_policy=SAFE_COMPLETE; execution_tool=mcp_tool_runner]: "
+                    "Resolve a customer issue using domain tools and policy checks."
+                ),
+                permission_mode="ACCEPT_EDITS",
+                workspace_path=temp_dir,
+                planner_strategy="audit_reflexion",
+            )
+            storage.create_run(state)
+            planner = LocalAuditPlanner(
+                storage=storage,
+                permission_engine=PermissionEngine(),
+                as2_status=AS2Status(
+                    available=False,
+                    package_version=None,
+                    runtime="test",
+                    note="test",
+                ),
+                planner_strategy="audit_reflexion",
+            )
+
+            planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            selected_tools = planning_event.data["selected_tools"]
+            self.assertEqual(
+                selected_tools,
+                ["risk_model", "safety_guard", "planner", "mcp_tool_runner", "verifier"],
+            )
+            search_events = [event for event in events if event.event_type.startswith("search_")]
+            self.assertLess(len(search_events), 20)
+            selected_event = next(event for event in events if event.event_type == "search_selected")
+            self.assertEqual(selected_event.data["expanded_nodes"], 1)
+
+    def test_audit_astar_treats_profile_policy_mode_as_safety_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = RunStorage(Path(temp_dir))
+            state = RunState(
+                run_id=new_run_id(),
+                goal=(
+                    "Multi-source planner profile "
+                    "[source_family=tau2; planner_profile=policy_tool_agent; "
+                    "execution_tool=mcp_tool_runner; policy_mode=confirm]: "
+                    "Confirm policy constraints before using the domain tool."
+                ),
+                permission_mode="DEFAULT",
+                workspace_path=temp_dir,
+                planner_strategy="audit_astar",
+            )
+            storage.create_run(state)
+            planner = LocalAuditPlanner(
+                storage=storage,
+                permission_engine=PermissionEngine(),
+                as2_status=AS2Status(
+                    available=False,
+                    package_version=None,
+                    runtime="test",
+                    note="test",
+                ),
+                planner_strategy="audit_astar",
+            )
+
+            planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertEqual(
+                planning_event.data["selected_tools"],
+                ["risk_model", "safety_guard", "planner", "mcp_tool_runner", "verifier"],
+            )
+            selected_event = next(event for event in events if event.event_type == "search_selected")
+            self.assertEqual(selected_event.data["expanded_nodes"], 1)
+
+    def test_reflexion_uses_profile_aligned_shortcut_for_skill_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = RunStorage(Path(temp_dir))
+            state = RunState(
+                run_id=new_run_id(),
+                goal=(
+                    "Multi-source planner profile "
+                    "[source_family=skillsbench; planner_profile=skill_workflow; "
+                    "execution_tools=file_writer,command_runner; policy_mode=act]: "
+                    "Repair a build and run the validation command."
+                ),
+                permission_mode="ACCEPT_EDITS",
+                workspace_path=temp_dir,
+                planner_strategy="audit_reflexion",
+            )
+            storage.create_run(state)
+            planner = LocalAuditPlanner(
+                storage=storage,
+                permission_engine=PermissionEngine(),
+                as2_status=AS2Status(
+                    available=False,
+                    package_version=None,
+                    runtime="test",
+                    note="test",
+                ),
+                planner_strategy="audit_reflexion",
+            )
+
+            planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertEqual(
+                planning_event.data["selected_tools"],
+                ["risk_model", "planner", "file_writer", "command_runner", "verifier"],
+            )
+            selected_event = next(event for event in events if event.event_type == "search_selected")
+            self.assertEqual(selected_event.data["expanded_nodes"], 1)
 
     def test_unknown_strategy_normalizes_to_baseline(self) -> None:
         self.assertEqual(normalize_planner_strategy("unknown"), "greedy_topk")

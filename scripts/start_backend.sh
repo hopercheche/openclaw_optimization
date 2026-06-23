@@ -2,6 +2,12 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+if [ -f ".env.local" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ".env.local"
+  set +a
+fi
 PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
 if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="python3"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -10,6 +11,7 @@ from .as2_runtime import generate_as2_openai_plan
 from .audit import render_audit_markdown
 from .models import AuditEvent, CandidateStep, RunState, utc_now
 from .permissions import PermissionEngine
+from .planner_profile_model import predict_goal_profile
 from .search_planner import DEFAULT_PLANNER_STRATEGY, normalize_planner_strategy, select_planner_path
 from .storage import RunStorage
 
@@ -211,6 +213,15 @@ class LocalAuditPlanner:
         lower_goal = goal.lower()
         mutating_goal = any(term in lower_goal for term in ["write", "edit", "deploy", "delete", "remove", "优化", "修改"])
         production_goal = any(term in lower_goal for term in ["prod", "production", "上线", "部署"])
+        mobile_goal = _looks_like_mobile_workflow(goal)
+        profile_execution_tools = _profile_execution_tools_for_goal(goal)
+        mobile_execution_tools = _mobile_execution_tools_for_goal(goal)
+        learned_execution_tools = _learned_execution_tools_for_goal(goal)
+        execution_tools = profile_execution_tools or _merge_learned_and_mobile_execution_tools(
+            goal,
+            learned_execution_tools,
+            mobile_execution_tools,
+        )
 
         candidates = [
             CandidateStep(
@@ -297,6 +308,8 @@ class LocalAuditPlanner:
                 mutates_workspace=True,
             ),
         ]
+        if mobile_goal or _needs_external_workflow_candidates(goal, execution_tools):
+            candidates.extend(_external_workflow_candidates(execution_tools, goal))
         return candidates
 
     def _simulate_tool(self, step: CandidateStep, workspace_path: str) -> str:
@@ -314,6 +327,14 @@ class LocalAuditPlanner:
             return "Verifier produced critique notes for completed and blocked steps."
         if step.tool_name == "goal_analyzer":
             return "Goal boundary recorded for audit replay."
+        if step.tool_name == "safety_guard":
+            return "Safety guard checked external-state, privacy, and confirmation policy before execution."
+        if step.tool_name == "mobile_gui_runner":
+            return "Mobile GUI workflow was simulated as an external-state action path."
+        if step.tool_name == "mobile_cli_runner":
+            return "Mobile CLI/ADB workflow was simulated with command evidence captured."
+        if step.tool_name == "mcp_tool_runner":
+            return "MCP-style host tool workflow was simulated with structured verifier evidence."
         return "MVP simulation captured the action without applying external side effects."
 
     def _critique(self, step: CandidateStep, outcome: str) -> str:
@@ -354,3 +375,327 @@ class PlannerThread(threading.Thread):
             self.planner._emit(self.state, "run_failed", "Planner failed.", {
                 "error": repr(exc),
             })
+
+
+def _looks_like_mobile_workflow(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "phoneharness",
+        "mobile",
+        "android",
+        "gui/",
+        "gui-primary",
+        "mcp",
+        "adb",
+        "手机",
+        "日历",
+        "邮件",
+        "联系人",
+        "地图",
+        "外卖",
+        "短信",
+        "相册",
+        "照片",
+        "浏览器",
+        "app",
+    ])
+
+
+def _profile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    found: list[str] = []
+    for marker in ["execution_tools=", "execution_tool="]:
+        start = lower_goal.find(marker)
+        if start < 0:
+            continue
+        raw_value = lower_goal[start + len(marker):]
+        raw_value = raw_value.split("]", 1)[0].split(";", 1)[0]
+        raw_value = raw_value.replace("|", ",").replace(" ", ",")
+        for item in raw_value.split(","):
+            tool_name = item.strip()
+            if tool_name in _EXECUTION_TOOLS:
+                found.append(tool_name)
+    return _ordered_execution_tools(found)
+
+
+def _learned_execution_tools_for_goal(goal: str) -> list[str]:
+    if _profile_execution_tools_for_goal(goal):
+        return []
+    if _goal_disallows_mutation(goal) or _goal_has_local_project_terms(goal):
+        return []
+    prediction = predict_goal_profile(goal)
+    if prediction.tools_confidence < 0.55:
+        return []
+    return _ordered_execution_tools(prediction.execution_tools or [])
+
+
+def _merge_learned_and_mobile_execution_tools(
+    goal: str,
+    learned_tools: list[str],
+    mobile_tools: list[str],
+) -> list[str]:
+    if not learned_tools:
+        return mobile_tools
+    prediction = predict_goal_profile(goal)
+    if (
+        prediction.profile_confidence >= 0.55
+        and prediction.planner_profile in {"skill_workflow", "api_planning", "policy_tool_agent"}
+    ):
+        return learned_tools
+    return _ordered_execution_tools([*learned_tools, *mobile_tools])
+
+
+def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    mobile_context = _has_mobile_context(lower_goal)
+    tools: list[str] = []
+    if any(term in lower_goal for term in [
+        "mcp",
+        "email",
+        "mail",
+        "send_email",
+        "calendar",
+        "create_calendar",
+        "邮件",
+        "邮箱",
+        "日历",
+        "提醒",
+    ]):
+        tools.append("mcp_tool_runner")
+    if mobile_context and any(term in lower_goal for term in [
+        "cli",
+        "shell",
+        "adb",
+        "termux",
+        "command",
+        "python",
+        "命令",
+        "脚本",
+    ]):
+        tools.append("mobile_cli_runner")
+    if any(term in lower_goal for term in [
+        "gui",
+        "app",
+        "android",
+        "phone",
+        "手机",
+        "打开",
+        "搜索",
+        "查看",
+        "设置",
+        "美团",
+        "地图",
+        "视频",
+        "音乐",
+        "相册",
+        "照片",
+        "浏览器",
+    ]):
+        tools.append("mobile_gui_runner")
+    if not tools and _looks_like_mobile_workflow(goal):
+        tools.append("mobile_gui_runner")
+
+    return _ordered_execution_tools(tools)
+
+
+def _has_mobile_context(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "phoneharness",
+        "mobile",
+        "android",
+        "gui/",
+        "gui-primary",
+        "adb",
+        "termux",
+        "手机",
+    ])
+
+
+_EXECUTION_TOOLS = {
+    "file_writer",
+    "command_runner",
+    "deploy_runner",
+    "mobile_gui_runner",
+    "mobile_cli_runner",
+    "mcp_tool_runner",
+}
+
+
+def _needs_external_workflow_candidates(goal: str, execution_tools: list[str]) -> bool:
+    lower_goal = goal.lower()
+    learned_policy = _learned_policy_mode_for_goal(goal)
+    return (
+        "mcp_tool_runner" in execution_tools
+        or "mobile_gui_runner" in execution_tools
+        or "mobile_cli_runner" in execution_tools
+        or "safety_policy=" in lower_goal
+        or learned_policy in {"confirm", "refuse"}
+        or "planner_profile=policy_tool_agent" in lower_goal
+        or "planner_profile=api_planning" in lower_goal
+    )
+
+
+def _external_workflow_candidates(execution_tools: list[str], goal: str) -> list[CandidateStep]:
+    lower_goal = goal.lower()
+    learned_policy = _learned_policy_mode_for_goal(goal)
+    include_safety_guard = any(term in lower_goal for term in [
+        "safety_policy=",
+        "policy_mode=refuse",
+        "policy_mode=confirm",
+        "never_auto",
+        "confirm_first",
+        "safe_complete",
+    ]) or learned_policy in {"confirm", "refuse"}
+    candidates = [
+        CandidateStep(
+            title="Check external workflow safety policy",
+            action="Classify the external workflow for privacy, irreversible actions, and confirmation policy.",
+            tool_name="safety_guard",
+            rationale="External tool workflows can touch state or policy boundaries, so safety should be explicit.",
+            impact=5,
+            evidence_value=5,
+            reversibility=5,
+            risk=1,
+        ),
+        CandidateStep(
+            title="Execute mobile GUI workflow",
+            action="Drive the Android GUI path in a sandboxed harness and capture verifier evidence.",
+            tool_name="mobile_gui_runner",
+            rationale="GUI execution is the primary PhoneHarness affordance for app-centered tasks.",
+            impact=5 if "mobile_gui_runner" in execution_tools else 3,
+            evidence_value=4,
+            reversibility=2,
+            risk=4,
+            mutates_workspace=True,
+        ),
+        CandidateStep(
+            title="Execute mobile CLI workflow",
+            action="Run device-side CLI or ADB-style commands in the mobile harness and capture logs.",
+            tool_name="mobile_cli_runner",
+            rationale="CLI execution covers PhoneHarness tasks with shell, Python, or ADB affordances.",
+            impact=5 if "mobile_cli_runner" in execution_tools else 2,
+            evidence_value=5,
+            reversibility=3,
+            risk=3,
+            mutates_workspace=True,
+        ),
+        CandidateStep(
+            title="Invoke MCP workflow tool",
+            action="Call host-side MCP-style tools for calendar, email, contacts, or structured phone workflows.",
+            tool_name="mcp_tool_runner",
+            rationale="MCP-style tools give structured execution evidence for cross-app phone tasks.",
+            impact=5 if "mcp_tool_runner" in execution_tools else 2,
+            evidence_value=5,
+            reversibility=3,
+            risk=3,
+            mutates_workspace=True,
+        ),
+    ]
+    if not include_safety_guard and "safety_guard" not in execution_tools:
+        candidates = [candidate for candidate in candidates if candidate.tool_name != "safety_guard"]
+    preferred = set(execution_tools)
+    return sorted(
+        candidates,
+        key=lambda step: (
+            step.tool_name != "safety_guard",
+            step.tool_name not in preferred,
+            -step.score,
+            step.title,
+        ),
+    )
+
+
+def _goal_disallows_mutation(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "without editing",
+        "without modifying",
+        "without writing",
+        "no edits",
+        "read-only",
+        "不修改",
+        "不要修改",
+        "不写入",
+        "不要写入",
+        "只读",
+    ])
+
+
+def _learned_policy_mode_for_goal(goal: str) -> str:
+    if _profile_execution_tools_for_goal(goal):
+        return ""
+    prediction = predict_goal_profile(goal)
+    if prediction.policy_confidence < 0.55:
+        return ""
+    if (
+        prediction.planner_profile != "policy_tool_agent"
+        and not _has_sensitive_policy_terms(goal)
+    ):
+        return ""
+    return prediction.policy_mode
+
+
+def _has_sensitive_policy_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "confirm",
+        "confirmation",
+        "approval",
+        "refund",
+        "cancel",
+        "cancellation",
+        "delete",
+        "export",
+        "privacy",
+        "private",
+        "sensitive",
+        "确认",
+        "批准",
+        "退款",
+        "取消",
+        "删除",
+        "删",
+        "导出",
+        "隐私",
+        "通讯录",
+        "联系人",
+        "电话",
+        "相册",
+        "照片",
+        "清理",
+        "存储",
+        "敏感",
+    ])
+
+
+def _goal_has_local_project_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    if re.search(r"\b(benchmark|readme|openclaw|repository|workspace|production|deploy)\b", lower_goal):
+        return True
+    if re.search(r"\bplanner\b", lower_goal) and re.search(
+        r"\b(code|file|files|workspace|benchmark|implementation)\b",
+        lower_goal,
+    ):
+        return True
+    return any(term in lower_goal for term in [
+        "优化",
+        "修改",
+        "测试",
+        "验证",
+        "删除",
+        "部署",
+        "上线",
+    ])
+
+
+def _ordered_execution_tools(tools: list[str]) -> list[str]:
+    seen = set(tools)
+    ordered = [
+        "mcp_tool_runner",
+        "mobile_cli_runner",
+        "mobile_gui_runner",
+        "file_writer",
+        "command_runner",
+        "deploy_runner",
+    ]
+    return [tool for tool in ordered if tool in seen]

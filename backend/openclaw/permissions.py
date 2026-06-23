@@ -10,12 +10,16 @@ READ_ONLY_TOOLS = {
     "risk_model",
     "verifier",
     "audit_reader",
+    "safety_guard",
 }
 
 MUTATING_TOOLS = {
     "file_writer",
     "command_runner",
     "deploy_runner",
+    "mobile_gui_runner",
+    "mobile_cli_runner",
+    "mcp_tool_runner",
 }
 
 DANGEROUS_TERMS = {
@@ -28,6 +32,15 @@ DANGEROUS_TERMS = {
     "secret",
     "credential",
     "token",
+    "删除",
+    "清空",
+    "转账",
+    "支付",
+    "隐私",
+    "联系人",
+    "短信",
+    "位置",
+    "照片",
 }
 
 
@@ -103,4 +116,3 @@ class PermissionEngine:
             tool_name=step.tool_name,
             rule="fallback_allow",
         )
-

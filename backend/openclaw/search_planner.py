@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import heapq
+import re
 from dataclasses import dataclass, field
 from typing import Iterable
 
 from .models import CandidateStep, RunState
 from .permissions import PermissionEngine
+from .planner_profile_model import predict_goal_profile
 
 
 DEFAULT_PLANNER_STRATEGY = "greedy_topk"
 SUPPORTED_PLANNER_STRATEGIES = {"greedy_topk", "audit_astar", "audit_reflexion"}
+_EXECUTION_TOOLS = {
+    "file_writer",
+    "command_runner",
+    "deploy_runner",
+    "mobile_gui_runner",
+    "mobile_cli_runner",
+    "mcp_tool_runner",
+}
 
 
 @dataclass(slots=True)
@@ -129,6 +139,10 @@ class AuditAStarPlannerStrategy:
                 selection_rule="audit_astar_empty_candidate_set",
                 trace_events=trace,
             )
+
+        shortcut = self._select_profile_aligned_path(candidates, state, desired_tools, trace)
+        if shortcut is not None:
+            return shortcut
 
         root = _SearchNode(
             node_id=0,
@@ -262,6 +276,96 @@ class AuditAStarPlannerStrategy:
                 "audit_astar_priority_g_plus_h_minus_value_with_permission_"
                 "risk_loop_and_evidence_terms"
             ),
+            trace_events=trace,
+        )
+
+    def _select_profile_aligned_path(
+        self,
+        candidates: list[CandidateStep],
+        state: RunState,
+        desired_tools: set[str],
+        trace: list[PlannerTraceEvent],
+    ) -> PlannerSelection | None:
+        if not (
+            _goal_has_explicit_execution_hints(state.goal)
+            or _goal_has_learned_execution_hints(state.goal)
+        ):
+            return None
+        if not desired_tools & _EXECUTION_TOOLS:
+            return None
+        if len(desired_tools) > self.max_depth:
+            return None
+
+        selected: list[CandidateStep] = []
+        missing_tools: list[str] = []
+        for tool_name in _reflection_tool_order(desired_tools):
+            if tool_name not in desired_tools:
+                continue
+            candidate = _best_candidate_for_tool(candidates, tool_name, selected)
+            if candidate is None:
+                missing_tools.append(tool_name)
+                continue
+            selected.append(candidate)
+
+        selected = _deduplicate_candidates(_order_reflection_path(selected, desired_tools))
+        covered_tools = {step.tool_name for step in selected}
+        if missing_tools or not desired_tools.issubset(covered_tools):
+            self._record(trace, "search_prune", "Skipped profile-aligned shortcut because coverage was incomplete.", {
+                "desired_tools": sorted(desired_tools),
+                "covered_tools": sorted(covered_tools),
+                "missing_tools": sorted(desired_tools - covered_tools),
+            })
+            return None
+
+        self._record(trace, "search_expand", "Expanded profile-aligned coverage shortcut.", {
+            "node_id": 0,
+            "depth": len(selected),
+            "path_titles": [candidate.title for candidate in selected],
+            "desired_tools": sorted(desired_tools),
+            "optimization_basis": "planner_profile execution_tool metadata",
+        })
+        total_value = 0.0
+        total_cost = 0.0
+        for index, candidate in enumerate(selected, start=1):
+            decision = self.permission_engine.decide(candidate, state.permission_mode)
+            action_value = self._action_value(
+                candidate,
+                desired_tools,
+                frozenset(step.tool_name for step in selected[: index - 1]),
+                decision.behavior,
+            )
+            transition_cost = self._transition_cost(candidate, decision.behavior)
+            total_value += action_value
+            total_cost += transition_cost
+            self._record(trace, "search_score", "Scored profile-aligned coverage step.", {
+                "candidate_title": candidate.title,
+                "tool_name": candidate.tool_name,
+                "permission_behavior": decision.behavior,
+                "candidate_score": candidate.score,
+                "transition_cost": _rounded(transition_cost),
+                "action_value": _rounded(action_value),
+                "coverage_index": index,
+                "remaining_desired_tools": sorted(desired_tools - {step.tool_name for step in selected[:index]}),
+            })
+
+        self._record(
+            trace,
+            "search_selected",
+            "A* planner selected profile-aligned coverage path.",
+            {
+                "strategy": self.name,
+                "expanded_nodes": 1,
+                "selected_titles": [step.title for step in selected],
+                "selected_tools": [step.tool_name for step in selected],
+                "best_utility": _rounded(total_value - total_cost),
+                "best_priority": _rounded(total_cost - total_value),
+            },
+            force=True,
+        )
+        return PlannerSelection(
+            strategy_name=self.name,
+            selected=selected[: self.max_depth],
+            selection_rule="audit_astar_profile_aligned_coverage_shortcut",
             trace_events=trace,
         )
 
@@ -477,6 +581,15 @@ def _desired_tools_for_goal(goal: str) -> set[str]:
         desired = {"risk_model", "planner", "file_writer", "command_runner", "verifier"}
     if production_goal:
         desired = {"goal_analyzer", "risk_model", "planner", "deploy_runner", "verifier"}
+    profile_tools = _profile_execution_tools_for_goal(goal)
+    mobile_tools = _mobile_execution_tools_for_goal(goal)
+    learned_tools = _learned_execution_tools_for_goal(goal)
+    execution_tools = profile_tools or _merge_learned_and_mobile_execution_tools(goal, learned_tools, mobile_tools)
+    if execution_tools:
+        if _goal_has_safety_policy(goal) or _learned_policy_mode_for_goal(goal) in {"confirm", "refuse"}:
+            desired = {"risk_model", "safety_guard", "planner", execution_tools[0], "verifier"}
+        else:
+            desired = {"risk_model", "planner", "verifier", *execution_tools[:2]}
     return desired
 
 
@@ -514,6 +627,9 @@ def _is_mutating_step(candidate: CandidateStep) -> bool:
         "file_writer",
         "command_runner",
         "deploy_runner",
+        "mobile_gui_runner",
+        "mobile_cli_runner",
+        "mcp_tool_runner",
     }
 
 
@@ -545,9 +661,242 @@ def _best_candidate_for_tool(
 def _reflection_tool_order(desired_tools: set[str]) -> list[str]:
     if "deploy_runner" in desired_tools:
         return ["goal_analyzer", "risk_model", "planner", "deploy_runner", "verifier"]
+    if any(tool in desired_tools for tool in ["mobile_gui_runner", "mobile_cli_runner", "mcp_tool_runner"]):
+        return [
+            "risk_model",
+            "safety_guard",
+            "planner",
+            "mcp_tool_runner",
+            "mobile_cli_runner",
+            "mobile_gui_runner",
+            "verifier",
+        ]
     if "file_writer" in desired_tools or "command_runner" in desired_tools:
         return ["risk_model", "planner", "file_writer", "command_runner", "verifier"]
     return ["goal_analyzer", "workspace_inspector", "planner", "risk_model", "verifier"]
+
+
+def _profile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    found: list[str] = []
+    for marker in ["execution_tools=", "execution_tool="]:
+        start = lower_goal.find(marker)
+        if start < 0:
+            continue
+        raw_value = lower_goal[start + len(marker):]
+        raw_value = raw_value.split("]", 1)[0].split(";", 1)[0]
+        raw_value = raw_value.replace("|", ",").replace(" ", ",")
+        for item in raw_value.split(","):
+            tool_name = item.strip()
+            if tool_name in _EXECUTION_TOOLS:
+                found.append(tool_name)
+    return _ordered_execution_tools(found)
+
+
+def _learned_execution_tools_for_goal(goal: str) -> list[str]:
+    if _profile_execution_tools_for_goal(goal):
+        return []
+    if _goal_disallows_mutation(goal) or _goal_has_local_project_terms(goal):
+        return []
+    prediction = predict_goal_profile(goal)
+    if prediction.tools_confidence < 0.55:
+        return []
+    return _ordered_execution_tools(prediction.execution_tools or [])
+
+
+def _merge_learned_and_mobile_execution_tools(
+    goal: str,
+    learned_tools: list[str],
+    mobile_tools: list[str],
+) -> list[str]:
+    if not learned_tools:
+        return mobile_tools
+    prediction = predict_goal_profile(goal)
+    if (
+        prediction.profile_confidence >= 0.55
+        and prediction.planner_profile in {"skill_workflow", "api_planning", "policy_tool_agent"}
+    ):
+        return learned_tools
+    return _ordered_execution_tools([*learned_tools, *mobile_tools])
+
+
+def _goal_has_learned_execution_hints(goal: str) -> bool:
+    if _profile_execution_tools_for_goal(goal):
+        return False
+    if _goal_disallows_mutation(goal) or _goal_has_local_project_terms(goal):
+        return False
+    prediction = predict_goal_profile(goal)
+    return prediction.has_execution_tools and prediction.tools_confidence >= 0.55
+
+
+def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    mobile_context = _has_mobile_context(lower_goal)
+    tools: list[str] = []
+    if any(term in lower_goal for term in [
+        "mcp",
+        "email",
+        "mail",
+        "send_email",
+        "calendar",
+        "create_calendar",
+        "邮件",
+        "邮箱",
+        "日历",
+        "提醒",
+    ]):
+        tools.append("mcp_tool_runner")
+    if mobile_context and any(term in lower_goal for term in [
+        "cli",
+        "shell",
+        "adb",
+        "termux",
+        "command",
+        "python",
+        "命令",
+        "脚本",
+    ]):
+        tools.append("mobile_cli_runner")
+    if any(term in lower_goal for term in [
+        "phoneharness",
+        "gui",
+        "app",
+        "android",
+        "phone",
+        "mobile",
+        "手机",
+        "打开",
+        "搜索",
+        "查看",
+        "设置",
+        "美团",
+        "地图",
+        "视频",
+        "音乐",
+        "相册",
+        "照片",
+        "浏览器",
+    ]):
+        tools.append("mobile_gui_runner")
+    return _ordered_execution_tools(tools)
+
+
+def _has_mobile_context(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "phoneharness",
+        "mobile",
+        "android",
+        "gui/",
+        "gui-primary",
+        "adb",
+        "termux",
+        "手机",
+    ])
+
+
+def _goal_has_safety_policy(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "safety_policy",
+        "policy_mode=refuse",
+        "policy_mode=confirm",
+        "safe_complete",
+        "confirm_first",
+        "never_auto",
+        "安全",
+        "确认",
+        "禁止自动",
+    ])
+
+
+def _learned_policy_mode_for_goal(goal: str) -> str:
+    if _profile_execution_tools_for_goal(goal):
+        return ""
+    prediction = predict_goal_profile(goal)
+    if prediction.policy_confidence < 0.55:
+        return ""
+    if (
+        prediction.planner_profile != "policy_tool_agent"
+        and not _has_sensitive_policy_terms(goal)
+    ):
+        return ""
+    return prediction.policy_mode
+
+
+def _has_sensitive_policy_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "confirm",
+        "confirmation",
+        "approval",
+        "refund",
+        "cancel",
+        "cancellation",
+        "delete",
+        "export",
+        "privacy",
+        "private",
+        "sensitive",
+        "确认",
+        "批准",
+        "退款",
+        "取消",
+        "删除",
+        "删",
+        "导出",
+        "隐私",
+        "通讯录",
+        "联系人",
+        "电话",
+        "相册",
+        "照片",
+        "清理",
+        "存储",
+        "敏感",
+    ])
+
+
+def _goal_has_local_project_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    if re.search(r"\b(benchmark|readme|openclaw|repository|workspace|production|deploy)\b", lower_goal):
+        return True
+    if re.search(r"\bplanner\b", lower_goal) and re.search(
+        r"\b(code|file|files|workspace|benchmark|implementation)\b",
+        lower_goal,
+    ):
+        return True
+    return any(term in lower_goal for term in [
+        "优化",
+        "修改",
+        "测试",
+        "验证",
+        "删除",
+        "部署",
+        "上线",
+    ])
+
+
+def _goal_has_explicit_execution_hints(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "planner_profile=",
+        "source_family=",
+        "execution_tool=",
+        "execution_tools=",
+    ])
+
+
+def _ordered_execution_tools(tools: Iterable[str]) -> list[str]:
+    seen = set(tools)
+    ordered = [
+        "mcp_tool_runner",
+        "mobile_cli_runner",
+        "mobile_gui_runner",
+        "file_writer",
+        "command_runner",
+        "deploy_runner",
+    ]
+    return [tool for tool in ordered if tool in seen]
 
 
 def _order_reflection_path(candidates: list[CandidateStep], desired_tools: set[str]) -> list[CandidateStep]:
