@@ -1,0 +1,36 @@
+{
+  "source_counts": {
+    "phoneharness": 6,
+    "skillsbench": 8,
+    "tau2": 12,
+    "toolbench": 8
+  },
+  "profile_counts": {
+    "api_planning": 8,
+    "mobile_or_mcp_workflow": 6,
+    "policy_tool_agent": 12,
+    "skill_workflow": 8
+  },
+  "policy_counts": {
+    "act": 27,
+    "confirm": 5,
+    "refuse": 2
+  },
+  "execution_tool_counts": {
+    "command_runner": 8,
+    "file_writer": 8,
+    "mcp_tool_runner": 24,
+    "mobile_cli_runner": 4,
+    "mobile_gui_runner": 4
+  },
+  "split_counts": {
+    "dev": 26,
+    "holdout": 8
+  },
+  "feature_method": [
+    "Normalize each dataset into source_family, planner_profile, execution_tools, and policy_mode.",
+    "Map policy_mode to permission behavior: act->allow, confirm->ask, refuse->deny.",
+    "Use the same OpenClaw task schema across mobile workflows, domain-policy tool agents, API planning, and skill workflows.",
+    "Keep raw source metadata in profile_metadata.json fixtures for auditability."
+  ]
+}
