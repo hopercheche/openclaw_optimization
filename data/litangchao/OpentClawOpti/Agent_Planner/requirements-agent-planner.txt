@@ -1,0 +1,11 @@
+datasets
+pyarrow
+pandas
+transformers
+torch
+accelerate
+peft
+trl
+agentscope
+# Official package name is `agentlightning`, not `agent-lightning`.
+agentlightning
