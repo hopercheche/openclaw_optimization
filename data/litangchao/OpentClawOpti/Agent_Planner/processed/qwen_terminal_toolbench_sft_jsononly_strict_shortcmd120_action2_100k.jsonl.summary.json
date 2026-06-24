@@ -1,0 +1,33 @@
+{
+  "input": "data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft.jsonl",
+  "output": "data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_100k.jsonl",
+  "start_line": 1,
+  "limit": 100000,
+  "max_source_lines": 0,
+  "max_target_chars": 1024,
+  "strict_json_prompt": true,
+  "max_commands": 2,
+  "max_command_keystrokes_chars": 120,
+  "drop_long_commands": true,
+  "skip_empty_commands": true,
+  "max_analysis_chars": 160,
+  "max_plan_chars": 160,
+  "force_incomplete_on_command_truncation": true,
+  "read_rows": 111670,
+  "written_rows": 100000,
+  "missing_text": 0,
+  "missing_assistant_marker": 0,
+  "json_parse_failures": 8433,
+  "target_too_long": 0,
+  "command_truncated": 51686,
+  "command_keystrokes_truncated": 0,
+  "long_commands_dropped": 62571,
+  "empty_commands_skipped": 3237,
+  "analysis_truncated": 99392,
+  "plan_truncated": 85340,
+  "command_count_histogram": {
+    "2": 78979,
+    "1": 21018,
+    "0": 3
+  }
+}

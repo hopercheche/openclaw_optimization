@@ -40,9 +40,10 @@ processed/qwen_terminal_toolbench_sft_jsononly_200k.jsonl            879M
 processed/qwen_terminal_toolbench_sft_jsononly_strict_100k.jsonl     441M
 processed/qwen_terminal_toolbench_sft_jsononly_strict_action3_100k.jsonl 393M
 processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd160_100k.jsonl 359M
+processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_100k.jsonl 338M
 ```
 
-The current `Agent_Planner` directory is about `30G`.
+The current `Agent_Planner` directory is about `32G`.
 
 ToolBench v1 files:
 
@@ -362,12 +363,21 @@ stage5:
   final_adapter: models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500/final_adapter
   train_runtime: 19:10
   train_loss: 0.2640
+
+stage6:
+  run: models/20260624T130000Z-qwen25-3b-gpu1-shortcmd120-action2-stage6-500
+  init_adapter: models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500/final_adapter
+  train_file: processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_100k.jsonl
+  max_steps: 500
+  final_adapter: models/20260624T130000Z-qwen25-3b-gpu1-shortcmd120-action2-stage6-500/final_adapter
+  train_runtime: 19:01
+  train_loss: 0.2431
 ```
 
 Current recommended checkpoint:
 
 ```text
-models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500/final_adapter
+models/20260624T130000Z-qwen25-3b-gpu1-shortcmd120-action2-stage6-500/final_adapter
 ```
 
 ## Evaluation Results
@@ -440,6 +450,17 @@ stage5_192tok_eval: eval_runs/20260624T115000Z-shortcmd160-stage5-heldout-192-64
 stage5_schema_valid_at_192_64gen: 87.50%
 stage5_mean_generation_seconds_192_64gen: 5.6561s
 stage5_mean_new_tokens_192_64gen: 159.6250
+
+stage6_192tok_eval: eval_runs/20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen
+stage6_schema_valid_at_192_64gen: 96.88%
+stage6_mean_generation_seconds_192_64gen: 4.6234s
+stage6_mean_new_tokens_192_64gen: 128.6562
+stage6_mean_ttft_192_64gen: 0.0708s
+
+stage6_160tok_eval: eval_runs/20260624T134000Z-shortcmd120-action2-stage6-heldout-160-64gen
+stage6_schema_valid_at_160_64gen: 93.75%
+stage6_mean_generation_seconds_160_64gen: 4.5087s
+stage6_mean_new_tokens_160_64gen: 127.1094
 ```
 
 Interpretation:
@@ -447,9 +468,10 @@ Interpretation:
 ```text
 The adapter learned the heldout token distribution, but the current target format is too verbose for a fast planner.
 It frequently starts with long <think> spans and needs a larger generation budget before a complete JSON action appears.
-The short-command stage5 adapter is the current best checkpoint.
-Use max_new_tokens=256 for now: 192 tokens only saves about 0.11s on the 64-example check but drops schema validity from 96.88% to 87.50%.
-This is now a strong fast-planner policy checkpoint for short next-actions, but still needs runtime integration and task-level evaluation before replacing the existing OpenClaw planner.
+The short-command action2 stage6 adapter is the current best checkpoint.
+Use max_new_tokens=192 for now: it preserves 96.88% schema validity on the 64-example check while cutting mean generation time to 4.6234s.
+The 160-token budget is usable but not the default: it saves only about 0.11s and drops schema validity to 93.75%.
+This is now a stronger fast-planner policy checkpoint for compact next-actions, but still needs runtime integration and task-level evaluation before replacing the existing OpenClaw planner.
 ```
 
 OpenClaw benchmark refresh:
@@ -534,5 +556,5 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 
 4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
 5. Attach automatic verifier rewards.
-6. Continue from the stage5 adapter with more short-command data and schema-first validation.
-7. For speed, test merged LoRA/vLLM or distill the stage5 policy into a smaller 1.5B/0.5B planner before replacing the existing OpenClaw planner path.
+6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
+7. For speed, test merged LoRA/vLLM or distill the stage6 policy into a smaller 1.5B/0.5B planner before replacing the existing OpenClaw planner path.
