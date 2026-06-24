@@ -1,0 +1,538 @@
+# Agent Planner Status
+
+Updated: 2026-06-24
+
+## Route Decision
+
+Use a new independent `Agent_Planner` training track:
+
+```text
+ToolBench SFT warm start
+-> AgentScope 2.0 rollout runtime
+-> automatic verifier/reward filtering
+-> Agent Lightning RL or preference optimization
+```
+
+This route is mature enough to start because:
+
+- ToolBench provides public tool-use training data and ToolLLaMA training/evaluation references.
+- AgentScope 2.0 provides runtime abstractions for event logging, permission control, sandboxing, middleware, and task planning.
+- Agent Lightning provides a framework direction for turning agent execution trajectories into training transitions/rewards.
+
+## Downloaded Locally
+
+Target root:
+
+```text
+/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner
+```
+
+Downloaded and generated:
+
+```text
+raw/qwen_terminal_toolbench_2b_full   7.9G
+raw/toolbench_v1                      516M
+raw/tau_bench_trajectories             15M
+rewards/tau_bench_rewards.jsonl       6.6M
+processed/qwen_terminal_toolbench_sft.jsonl                         8.4G
+processed/toolbench_sft.jsonl                                        3.8G
+processed/qwen_terminal_toolbench_sft_jsononly_200k.jsonl            879M
+processed/qwen_terminal_toolbench_sft_jsononly_strict_100k.jsonl     441M
+processed/qwen_terminal_toolbench_sft_jsononly_strict_action3_100k.jsonl 393M
+processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd160_100k.jsonl 359M
+```
+
+The current `Agent_Planner` directory is about `30G`.
+
+ToolBench v1 files:
+
+```text
+raw/toolbench_v1/data/train-00000-of-00004.parquet
+raw/toolbench_v1/data/train-00001-of-00004.parquet
+raw/toolbench_v1/data/train-00002-of-00004.parquet
+raw/toolbench_v1/data/train-00003-of-00004.parquet
+raw/toolbench_v1/data/validation-00000-of-00001.parquet
+raw/toolbench_v1/benchmark/*.parquet
+```
+
+tau-bench trajectory sample files:
+
+```text
+raw/tau_bench_trajectories/Qwen3-235B-A22B-FP8.jsonl
+raw/tau_bench_trajectories/gpt-4.1-mini.jsonl
+raw/tau_bench_trajectories/gpt-4o-mini.jsonl
+raw/tau_bench_trajectories/gpt-oss-20b.jsonl
+```
+
+## Primary Large Dataset Candidate
+
+Selected and downloaded:
+
+```text
+LLM-OS-Models/Qwen-Terminal-ToolBench-Processed-Tokenized
+subset: qwen35_2b_full_terminal_toolcall_processed_v1
+reported size: 36.26 GiB
+actual local size: 7.9G
+reported rows: 1,011,776
+file count selected by downloader: 20
+```
+
+The full repository reports about 77GB, so the downloader only selects the one subfolder and skips `cache-*.arrow` files by default. The Hugging Face card reports the selected subset as 36.26 GiB, while the final downloaded Arrow files occupy 7.9G locally. Use the local files as the operational source of truth.
+
+Verified dry-run command:
+
+```bash
+python data/litangchao/OpentClawOpti/Agent_Planner/scripts/download_hf_subset.py \
+  --source qwen_terminal_toolbench_2b_full \
+  --target-root data/litangchao/OpentClawOpti/Agent_Planner/raw \
+  --dry-run
+```
+
+Full download command:
+
+```bash
+python data/litangchao/OpentClawOpti/Agent_Planner/scripts/download_hf_subset.py \
+  --source qwen_terminal_toolbench_2b_full \
+  --target-root data/litangchao/OpentClawOpti/Agent_Planner/raw
+```
+
+Downloaded file check:
+
+```text
+20 files
+17 Arrow shards
+dataset_info.json
+prepare_meta.json
+state.json
+no .part files remaining
+```
+
+Qwen metadata check:
+
+```text
+features: text:string
+processed_rows: 1,011,776
+template_model_id: Qwen/Qwen3.5-2B
+chat_template_hash: 273d8e0e683b8850
+```
+
+## Reward Data Generated
+
+Generated with:
+
+```bash
+python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_trajectories.py \
+  --input-dir data/litangchao/OpentClawOpti/Agent_Planner/raw/tau_bench_trajectories \
+  --output data/litangchao/OpentClawOpti/Agent_Planner/rewards/tau_bench_rewards.jsonl
+```
+
+Result:
+
+```text
+examples: 660
+successes: 248
+success_rate: 0.3758
+output_size: 6.6M
+```
+
+Agent-Lightning-style transition bridge generated with:
+
+```bash
+/home/litangchao/miniconda3/bin/conda run -n AgentOpti python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/build_agent_lightning_transitions.py \
+  --input data/litangchao/OpentClawOpti/Agent_Planner/rewards/tau_bench_rewards.jsonl \
+  --output data/litangchao/OpentClawOpti/Agent_Planner/rewards/tau_bench_agent_lightning_transitions.jsonl \
+  --credit final
+```
+
+Result:
+
+```text
+schema: agent_lightning_transition_v0
+episodes: 660
+transitions: 5,612
+successful_episodes: 248
+loop_episodes: 31
+reward_sum: 239.5
+output_size: 25M
+```
+
+## Environment Notes
+
+Created conda environment:
+
+```text
+name: AgentOpti
+path: /home/litangchao/miniconda3/envs/AgentOpti
+python: 3.11.15
+```
+
+Installed and verified in `AgentOpti`:
+
+```text
+pyarrow 24.0.0
+pandas 3.0.3
+datasets 5.0.0
+transformers 5.12.1
+torch 2.11.0+cu128
+accelerate 1.14.0
+peft 0.19.1
+trl 1.6.0
+agentscope 2.0.2
+fsspec 2026.4.0
+agentlightning 0.3.1
+```
+
+Agent Lightning source and install status:
+
+```text
+source: external/agent-lightning
+git_head: 0b40cb7
+project_name: agentlightning
+version: 0.3.1
+install: editable in AgentOpti
+cli: agl
+```
+
+The earlier failed package name was `agent-lightning`; the correct PyPI/project name is `agentlightning`.
+
+CUDA note:
+
+```text
+torch.cuda.is_available(): False
+torch.version.cuda: 12.8
+NVIDIA driver: 570.124.06
+NVIDIA GPUs visible in /proc/driver/nvidia/gpus: 3 x NVIDIA L20
+nvidia-smi works on the host when commands are run outside the Codex sandbox
+/dev/nvidia* nodes exist on the host but are not visible in the default Codex sandbox
+```
+
+The PyTorch runtime mismatch is fixed by using cu128. GPU training commands must be run outside the default Codex sandbox so the process can see `/dev/nvidia*`.
+
+Host GPU remediation notes:
+
+```text
+/proc/driver/nvidia/version: 570.124.06
+/proc/driver/nvidia/gpus: 3 x NVIDIA L20
+/proc/devices: nvidia major 195, nvidia-uvm major 504
+/usr/bin/nvidia-modprobe: setuid but owned by nobody:nogroup
+```
+
+No host GPU repair was needed. The failing checks came from the default sandbox view. Host-side read-only checks confirmed:
+
+```text
+GPU0: NVIDIA L20, 1 MiB used
+GPU1: NVIDIA L20, about 15 GiB used by text-embeddings-router-80 before training
+GPU2: NVIDIA L20, 1 MiB used
+/dev/nvidia0, /dev/nvidia1, /dev/nvidia2, /dev/nvidiactl, /dev/nvidia-uvm exist on host
+```
+
+After `/dev/nvidia*` appears, verify the planner environment:
+
+```bash
+/home/litangchao/miniconda3/bin/conda run -n AgentOpti python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), torch.cuda.device_count())"
+```
+
+Environment records:
+
+```text
+configs/AgentOpti.minimal-environment.yml
+configs/agentopti_pip_freeze.txt
+```
+
+Prepared scripts:
+
+```text
+scripts/inspect_tabular_data.py
+scripts/normalize_sft_data.py
+scripts/normalize_tau_trajectories.py
+scripts/build_agent_lightning_transitions.py
+scripts/train_planner_sft.py
+scripts/launch_gpu1_sft.sh
+scripts/launch_gpu1_sft_full.sh
+scripts/evaluate_planner_sft.py
+scripts/launch_gpu1_eval.sh
+scripts/build_openclaw_no_hint_suite.py
+scripts/build_jsononly_sft_data.py
+scripts/launch_gpu1_sft_jsononly.sh
+```
+
+## Training Launch Attempt
+
+GPU1 smoke SFT launch command:
+
+```bash
+/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner/scripts/launch_gpu1_sft.sh
+```
+
+Result on 2026-06-23:
+
+```text
+status: blocked before training
+reason: /dev/nvidia1 is missing in this session
+log: logs/20260623T055846Z-qwen25-3b-gpu1-smoke.log
+output_dir_precreated: models/20260623T055846Z-qwen25-3b-gpu1-smoke
+checkpoint_written: no
+```
+
+The launch script intentionally fails fast when GPU1 is not exposed, so no CPU fallback training was started.
+
+Host-side GPU1 smoke SFT completed on 2026-06-23:
+
+```text
+status: completed
+gpu: GPU1 / NVIDIA L20
+base_model: Qwen/Qwen2.5-3B-Instruct local cache
+train_file: processed/qwen_terminal_toolbench_sft_sample.jsonl
+max_steps: 50
+max_seq_length: 1024
+max_train_samples: 2000
+lora_r: 16
+lora_alpha: 32
+bf16: true
+train_runtime: 84.63s
+train_loss: 0.3958
+checkpoint: models/20260623T060347Z-qwen25-3b-gpu1-smoke/checkpoint-50
+final_adapter: models/20260623T060347Z-qwen25-3b-gpu1-smoke/final_adapter
+log: logs/20260623T060347Z-qwen25-3b-gpu1-smoke.log
+```
+
+Streaming large SFT completed on GPU1 on 2026-06-23:
+
+```text
+status: completed
+pid: exited
+gpu: GPU1 / NVIDIA L20
+base_model: Qwen/Qwen2.5-3B-Instruct local cache
+train_file: processed/qwen_terminal_toolbench_sft.jsonl
+streaming: true
+shuffle_buffer: 10000
+max_train_samples: 200000
+max_steps: 5000
+max_seq_length: 1024
+effective_batch: 8
+lora_r: 16
+lora_alpha: 32
+bf16: true
+save_steps: 500
+output_dir: models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k
+checkpoint: models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/checkpoint-5000
+final_adapter: models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter
+log: logs/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k.log
+runtime: about 3:31:31
+last_logged_loss_step_5000: 0.3573
+observed_gpu_memory: about 9.2 GiB for training process, plus existing text-embeddings-router-80
+gpu_after_completion: training process released; only text-embeddings-router-80 remained on GPU1
+```
+
+Earlier eager-load attempts were stopped before training because JSONL `load_dataset` spent several minutes CPU-parsing the full file before GPU use. The active run uses streaming JSONL and batch-time tokenization.
+
+JSON-only/action-level optimization passes completed on GPU1 on 2026-06-24:
+
+```text
+stage2:
+  run: models/20260624T070128Z-qwen25-3b-gpu1-jsononly-stage2-1k
+  init_adapter: models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter
+  train_file: processed/qwen_terminal_toolbench_sft_jsononly_200k.jsonl
+  max_steps: 1000
+  final_adapter: models/20260624T070128Z-qwen25-3b-gpu1-jsononly-stage2-1k/final_adapter
+  last_logged_loss: 0.2910
+
+stage3:
+  run: models/20260624T081500Z-qwen25-3b-gpu1-strict-json-stage3-500
+  init_adapter: models/20260624T070128Z-qwen25-3b-gpu1-jsononly-stage2-1k/final_adapter
+  train_file: processed/qwen_terminal_toolbench_sft_jsononly_strict_100k.jsonl
+  max_steps: 500
+  final_adapter: models/20260624T081500Z-qwen25-3b-gpu1-strict-json-stage3-500/final_adapter
+  last_logged_loss: 0.3022
+
+stage4:
+  run: models/20260624T091500Z-qwen25-3b-gpu1-action3-stage4-500
+  init_adapter: models/20260624T081500Z-qwen25-3b-gpu1-strict-json-stage3-500/final_adapter
+  train_file: processed/qwen_terminal_toolbench_sft_jsononly_strict_action3_100k.jsonl
+  max_steps: 500
+  final_adapter: models/20260624T091500Z-qwen25-3b-gpu1-action3-stage4-500/final_adapter
+  last_logged_loss: 0.2521
+
+stage5:
+  run: models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500
+  init_adapter: models/20260624T091500Z-qwen25-3b-gpu1-action3-stage4-500/final_adapter
+  train_file: processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd160_100k.jsonl
+  max_steps: 500
+  final_adapter: models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500/final_adapter
+  train_runtime: 19:10
+  train_loss: 0.2640
+```
+
+Current recommended checkpoint:
+
+```text
+models/20260624T111500Z-qwen25-3b-gpu1-shortcmd160-stage5-500/final_adapter
+```
+
+## Evaluation Results
+
+Evaluation summary:
+
+```text
+EVAL_SUMMARY.md
+```
+
+Base-vs-LoRA heldout evaluation:
+
+```text
+run: eval_runs/20260623T143655Z-base-vs-lora-heldout
+heldout_start_line: 300001
+loss_examples: 64
+generation_examples: 16
+max_new_tokens: 256
+base_loss: 1.811775
+adapter_loss: 1.056539
+adapter_relative_loss_improvement: 41.68%
+base_valid_json_rate: 12.50%
+adapter_valid_json_rate: 0.00%
+base_generation_speed: 60.63 tok/s
+adapter_generation_speed: 27.88 tok/s
+```
+
+Adapter-only long generation check:
+
+```text
+run: eval_runs/20260623T144420Z-lora-heldout-gen768
+generation_examples: 8
+max_new_tokens: 768
+adapter_valid_json_rate: 50.00%
+adapter_schema_valid_rate: 50.00%
+mean_ttft: 0.0966s
+mean_generation_seconds: 21.6793s
+mean_generation_speed: 28.28 tok/s
+```
+
+JSON-only/action-level optimization evaluation:
+
+```text
+stage2_eval: eval_runs/20260624T080900Z-jsononly-stage2-heldout
+stage2_schema_valid_at_256: 31.25%
+
+stage3_eval: eval_runs/20260624T084200Z-strict-json-stage3-heldout
+stage3_schema_valid_at_256: 31.25%
+
+stage4_eval: eval_runs/20260624T101000Z-action3-stage4-heldout
+stage4_schema_valid_at_256_16gen: 87.50%
+stage4_mean_generation_seconds_16gen: 7.1978s
+stage4_mean_ttft_16gen: 0.0672s
+
+stage4_64gen_eval: eval_runs/20260624T103100Z-action3-stage4-heldout-64gen
+stage4_schema_valid_at_256_64gen: 76.56%
+stage4_mean_generation_seconds_64gen: 7.2388s
+stage4_mean_ttft_64gen: 0.0767s
+
+stage4_192tok_eval: eval_runs/20260624T102000Z-action3-stage4-heldout-192
+stage4_schema_valid_at_192_16gen: 43.75%
+
+stage5_64gen_eval: eval_runs/20260624T114000Z-shortcmd160-stage5-heldout-64gen
+stage5_schema_valid_at_256_64gen: 96.88%
+stage5_mean_generation_seconds_256_64gen: 5.7663s
+stage5_mean_new_tokens_256_64gen: 164.2812
+stage5_mean_ttft_256_64gen: 0.0703s
+
+stage5_192tok_eval: eval_runs/20260624T115000Z-shortcmd160-stage5-heldout-192-64gen
+stage5_schema_valid_at_192_64gen: 87.50%
+stage5_mean_generation_seconds_192_64gen: 5.6561s
+stage5_mean_new_tokens_192_64gen: 159.6250
+```
+
+Interpretation:
+
+```text
+The adapter learned the heldout token distribution, but the current target format is too verbose for a fast planner.
+It frequently starts with long <think> spans and needs a larger generation budget before a complete JSON action appears.
+The short-command stage5 adapter is the current best checkpoint.
+Use max_new_tokens=256 for now: 192 tokens only saves about 0.11s on the 64-example check but drops schema validity from 96.88% to 87.50%.
+This is now a strong fast-planner policy checkpoint for short next-actions, but still needs runtime integration and task-level evaluation before replacing the existing OpenClaw planner.
+```
+
+OpenClaw benchmark refresh:
+
+```text
+main: openclaw_benchmark_runs/20260623T143948Z-main-deterministic
+no_hint_model_enabled: openclaw_benchmark_runs/20260623T143906Z-nohint-model-enabled
+no_hint_model_disabled: openclaw_benchmark_runs/20260623T143906Z-nohint-model-disabled
+
+main audit_astar success: 100.00%
+main audit_reflexion success: 100.00%
+main greedy_topk success: 5.68%
+main stop_criteria_met: true
+no_hint enabled success: 97.06%
+no_hint enabled holdout success: 100.00%
+no_hint disabled success: 5.88%
+no_hint disabled holdout success: 0.00%
+```
+
+## Next Implementation Steps
+
+1. Convert ToolBench parquet rows into planner SFT JSONL. Done in `AgentOpti`:
+
+```bash
+/home/litangchao/miniconda3/bin/conda run -n AgentOpti python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_sft_data.py \
+  --kind toolbench \
+  --input data/litangchao/OpentClawOpti/Agent_Planner/raw/toolbench_v1/data \
+  --output data/litangchao/OpentClawOpti/Agent_Planner/processed/toolbench_sft.jsonl
+```
+
+   Result:
+
+```text
+processed/toolbench_sft.jsonl
+examples: 188,304
+size: 3.8G
+```
+
+   Qwen SFT text conversion done in `AgentOpti`:
+
+```bash
+/home/litangchao/miniconda3/bin/conda run -n AgentOpti python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_sft_data.py \
+  --kind qwen_text \
+  --input data/litangchao/OpentClawOpti/Agent_Planner/raw/qwen_terminal_toolbench_2b_full/qwen35_2b_full_terminal_toolcall_processed_v1 \
+  --output data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft.jsonl
+```
+
+   Result:
+
+```text
+processed/qwen_terminal_toolbench_sft.jsonl
+examples: 1,011,776
+size: 8.4G
+```
+
+2. Convert tau-bench trajectories into automatic reward examples. Done for the initial 4-model sample:
+
+```bash
+python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_trajectories.py \
+  --input-dir data/litangchao/OpentClawOpti/Agent_Planner/raw/tau_bench_trajectories \
+  --output data/litangchao/OpentClawOpti/Agent_Planner/rewards/tau_bench_rewards.jsonl
+```
+
+3. Define a common training schema:
+
+```json
+{
+  "goal": "...",
+  "tools": ["..."],
+  "trajectory": ["..."],
+  "target_next_action": "...",
+  "reward": {
+    "success": true,
+    "invalid_tool": false,
+    "policy_violation": false,
+    "loop": false
+  }
+}
+```
+
+4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
+5. Attach automatic verifier rewards.
+6. Continue from the stage5 adapter with more short-command data and schema-first validation.
+7. For speed, test merged LoRA/vLLM or distill the stage5 policy into a smaller 1.5B/0.5B planner before replacing the existing OpenClaw planner path.

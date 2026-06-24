@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-06-23T14:47:20.968147Z",
+  "run_config": {
+    "created_at": "2026-06-23T14:44:24.909224Z",
+    "base_model": "/home/litangchao/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1",
+    "adapter": "/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner/models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter",
+    "eval_file": "/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft.jsonl",
+    "output_dir": "/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260623T144420Z-lora-heldout-gen768",
+    "start_line": 300001,
+    "loss_examples": 0,
+    "generation_examples": 8,
+    "max_seq_length": 1024,
+    "max_new_tokens": 768,
+    "dtype": "bf16",
+    "require_cuda": true,
+    "skip_base": true,
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "device_name": "NVIDIA L20"
+  },
+  "results": [
+    {
+      "label": "lora_adapter",
+      "adapter_path": "/home/litangchao/OpenClawPOpti/data/litangchao/OpentClawOpti/Agent_Planner/models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter",
+      "examples_scored": 0,
+      "target_tokens_scored": 0,
+      "loss": 0.0,
+      "perplexity": 1.0,
+      "generation_examples": 8,
+      "valid_json_rate": 0.5,
+      "schema_valid_rate": 0.5,
+      "required_field_rate": 0.5,
+      "command_array_rate": 0.5,
+      "command_overlap_mean": 0.1175,
+      "task_complete_bool_rate": 0.5,
+      "mean_ttft_seconds": 0.096605,
+      "p50_ttft_seconds": 0.094078,
+      "p95_ttft_seconds": 0.204704,
+      "mean_generation_seconds": 21.679349,
+      "mean_new_tokens": 613.375,
+      "mean_tokens_per_second": 28.2769,
+      "gpu_peak_memory_mb": 6197.34
+    }
+  ],
+  "comparison": {}
+}
