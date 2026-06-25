@@ -251,6 +251,7 @@ scripts/build_agent_lightning_transitions.py
 scripts/train_planner_sft.py
 scripts/merge_lora_adapter.py
 scripts/benchmark_vllm_planner.py
+scripts/benchmark_transformers_batch_planner.py
 scripts/launch_gpu1_sft.sh
 scripts/launch_gpu1_sft_full.sh
 scripts/evaluate_planner_sft.py
@@ -283,6 +284,18 @@ gpu_peak_memory_mb: 6012.04
 ```
 
 Compared with the stage6 LoRA adapter run (`20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen`), the merged model keeps the same compact action2 target surface while cutting mean generation time from `4.623401s` to `2.115309s` on Transformers generation.
+
+The best current serving/evaluation configuration is the merged model with batched Transformers generation, not vLLM. On the same GPU1, same 64-example heldout slice, same 192-token budget:
+
+| Runtime | Eval Run | Batch | Schema Valid | Amortized Request | Tok/s | Peak GPU MB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Transformers merged | `20260625T002600Z-stage6-merged-transformers-192-64gen` | 1 | 100.00% | 2.1153s | 60.30 | 6012.04 |
+| Transformers merged | `20260625T034500Z-stage6-transformers-batch8-192-64gen` | 8 | 100.00% | 0.7403s | 172.35 | 6834.32 |
+| Transformers merged | `20260625T035000Z-stage6-transformers-batch16-192-64gen` | 16 | 100.00% | 0.4462s | 277.85 | 7775.01 |
+| Transformers merged | `20260625T035500Z-stage6-transformers-batch32-192-64gen` | 32 | 98.44% | 0.6790s | 182.94 | 9645.99 |
+| vLLM | `20260625T010800Z-stage6-vllm-batch8-192-64gen` | 8 | 60.94% | 0.2157s | 302.50 | n/a |
+
+Conclusion: use `batch_size=16` for the high-accuracy path. It preserves the 100% schema-valid rate of the single-request Transformers baseline while improving amortized request latency by about `4.74x` and token throughput by about `4.61x`. Batch32 is not recommended because it is both slower than batch16 and drops schema validity to 98.44%.
 
 vLLM is not installed in `AgentOpti` yet:
 
@@ -635,4 +648,4 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
 5. Attach automatic verifier rewards.
 6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
-7. For speed, test merged LoRA/vLLM or distill the stage6 policy into a smaller 1.5B/0.5B planner before replacing the existing OpenClaw planner path.
+7. For speed, keep the merged model on Transformers batch16 as the current high-accuracy serving path. Treat vLLM as a separate validate-and-fallback or early-termination repair project before using it as a direct replacement.

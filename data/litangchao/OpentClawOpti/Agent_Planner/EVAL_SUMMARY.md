@@ -83,6 +83,9 @@ All rows below use heldout data generated from line 300001 of the original Qwen 
 | stage6 shortcmd120 action2 | `20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen` | 192 | 64 | 96.88% | 0.0708s | 4.6234s | 128.66 | 27.82 |
 | stage6 shortcmd120 action2, short budget | `20260624T134000Z-shortcmd120-action2-stage6-heldout-160-64gen` | 160 | 64 | 93.75% | 0.0704s | 4.5087s | 127.11 | 28.19 |
 | stage6 merged full model | `20260625T002600Z-stage6-merged-transformers-192-64gen` | 192 | 64 | 100.00% | 0.0483s | 2.1153s | 127.58 | 60.30 |
+| stage6 merged Transformers batch8 | `20260625T034500Z-stage6-transformers-batch8-192-64gen` | 192 | 64 | 100.00% | n/a | 0.7403s amortized | 127.59 | 172.35 |
+| stage6 merged Transformers batch16 | `20260625T035000Z-stage6-transformers-batch16-192-64gen` | 192 | 64 | 100.00% | n/a | 0.4462s amortized | 123.97 | 277.85 |
+| stage6 merged Transformers batch32 | `20260625T035500Z-stage6-transformers-batch32-192-64gen` | 192 | 64 | 98.44% | n/a | 0.6790s amortized | 124.22 | 182.94 |
 | stage6 merged vLLM batch1 | `20260625T010100Z-stage6-vllm-batch1-192-64gen` | 192 | 64 | 59.38% | n/a | 0.6635s amortized | 63.42 | 95.58 |
 | stage6 merged vLLM batch8 | `20260625T010800Z-stage6-vllm-batch8-192-64gen` | 192 | 64 | 60.94% | n/a | 0.2157s amortized | 65.23 | 302.50 |
 
@@ -94,7 +97,9 @@ The 192-token stage5 check is usable but not recommended as the default: it save
 
 Stage6 is the new best checkpoint. Reducing the target to at most two short commands, with 120-character command keystroke filtering and 160-character analysis/plan fields, preserved 96.88% schema validity at a 192-token budget and reduced mean generation time to 4.6234s. The 160-token budget is usable but not the default because it saves only about 0.11s while dropping schema validity to 93.75%.
 
-Merging the stage6 LoRA into a full model is the current best speed path. The merged Transformers run cut mean generation time from 4.6234s to 2.1153s on the same GPU1, same 64 examples, same 192-token budget, while improving schema validity from 96.88% to 100.00%. Token throughput rose from 27.82 tok/s to 60.30 tok/s, and TTFT dropped from 0.0708s to 0.0483s.
+Merging the stage6 LoRA into a full model created the stable base for serving optimization. The merged Transformers run cut mean generation time from 4.6234s to 2.1153s on the same GPU1, same 64 examples, same 192-token budget, while improving schema validity from 96.88% to 100.00%. Token throughput rose from 27.82 tok/s to 60.30 tok/s, and TTFT dropped from 0.0708s to 0.0483s.
+
+Batched Transformers generation is the current best high-accuracy serving path. Batch8 preserves 100% schema validity and cuts amortized request latency to 0.7403s. Batch16 is better: it preserves 100% schema validity, cuts amortized request latency to 0.4462s, and reaches 277.85 tok/s on GPU1. Batch32 is not recommended because it drops schema validity to 98.44% and is slower than batch16.
 
 Merged checkpoint:
 
@@ -115,9 +120,9 @@ AgentOptiVLLM: vllm 0.18.1, torch 2.10.0+cu128
 AgentOpti: unchanged, torch 2.11.0+cu128
 ```
 
-The vLLM serving experiment confirms the speed path but not the accuracy path yet. Batch1 cuts amortized generation time from the Transformers merged `2.1153s` to `0.6635s`, and batch8 reaches `302.50 tok/s` with `0.2157s` amortized per request. However, schema validity drops to about 60% because vLLM often terminates after roughly 8 tokens in the middle of the JSON object. Token-prompt input, eos suppression, `ignore_eos`, `min_tokens`, and structured JSON schema smoke tests did not recover the Transformers schema-valid rate.
+The vLLM serving experiment confirms the raw speed path but not the accuracy path yet. Batch1 cuts amortized generation time from the Transformers merged `2.1153s` to `0.6635s`, and batch8 reaches `302.50 tok/s` with `0.2157s` amortized per request. However, schema validity drops to about 60% because vLLM often terminates after roughly 8 tokens in the middle of the JSON object. Token-prompt input, eos suppression, `ignore_eos`, `min_tokens`, and structured JSON schema smoke tests did not recover the Transformers schema-valid rate.
 
-Current recommendation: keep the merged Transformers model as the accuracy baseline. Treat vLLM as a serving-speed candidate that needs either a validate-and-fallback wrapper or another short-output fine-tuning pass that explicitly penalizes early termination under the vLLM decoding stack.
+Current recommendation: use the merged Transformers model with `batch_size=16` as the active high-accuracy optimization route. Treat vLLM as a serving-speed candidate that needs either a validate-and-fallback wrapper or another short-output fine-tuning pass that explicitly penalizes early termination under the vLLM decoding stack.
 
 ### What Changed
 
@@ -136,15 +141,16 @@ This made the model stop spending most of the token budget on hidden reasoning a
 
 ### Next Direction
 
-Do not replace the current OpenClaw planner with this checkpoint yet. Stage6 is now a stronger policy candidate for compact next-actions, but mean generation is still about 4.62s for roughly 129 output tokens on Qwen2.5-3B + LoRA.
+Do not replace the current OpenClaw planner with this checkpoint yet. Stage6 is now a stronger policy candidate for compact next-actions, and the merged batch16 path brings amortized request latency down to 0.4462s on GPU1, but it still needs runtime integration and task-level evaluation before replacing the deterministic planner.
 
 The next optimization should be one of:
 
 ```text
 1. continue stage6 with more compact short-command rows and evaluate at 64+ generation examples each time
 2. add constrained JSON/schema decoding so near-miss generations cannot drift outside the planner schema
-3. build a validate-and-fallback serving wrapper: vLLM first, then Transformers merged fallback only when the planner JSON fails schema validation
+3. wire the merged Transformers batch16 path into a planner-serving wrapper with schema validation
 4. distill the stage6 policy into Qwen2.5-1.5B-Instruct or a smaller planner if response speed is the main constraint
+5. continue vLLM separately only after fixing its early-termination/schema drop
 ```
 
 ## OpenClaw Planner Benchmarks
