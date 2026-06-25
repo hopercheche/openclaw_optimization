@@ -297,6 +297,36 @@ The best current serving/evaluation configuration is the merged model with batch
 
 Conclusion: use `batch_size=16` for the high-accuracy path. It preserves the 100% schema-valid rate of the single-request Transformers baseline while improving amortized request latency by about `4.74x` and token throughput by about `4.61x`. Batch32 is not recommended because it is both slower than batch16 and drops schema validity to 98.44%.
 
+The next batch16 optimization is prompt-length batching. It keeps the model/runtime on Transformers but groups similarly sized prompts before generation, which reduces left-padding work inside each batch. The high-accuracy default now uses:
+
+```text
+batch_size: 16
+max_seq_length: 1024
+max_new_tokens: 256
+dtype: bf16
+sort_by_prompt_length: true
+```
+
+256-example GPU1 comparison:
+
+| Config | Eval Run | Schema Valid | Command Overlap | Amortized Request | Tok/s | Prompt Padding |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| batch16, original order, 192 tokens | `20260625T054500Z-stage6-transformers-batch16-192-256gen` | 100.00% | 0.1393 | 0.3621s | 347.79 | 21.54% |
+| batch16, sorted prompts, 192 tokens | `20260625T054000Z-stage6-transformers-batch16-192-sort-256gen` | 99.61% | 0.1398 | 0.2598s | 487.94 | 3.41% |
+| batch16, sorted prompts, 256 tokens | `20260625T055000Z-stage6-transformers-batch16-256-sort-256gen` | 100.00% | 0.1399 | 0.2638s | 481.10 | 3.41% |
+| speed candidate: seq768, sorted prompts, 256 tokens | `20260625T055500Z-stage6-transformers-batch16-256-seq768-sort-256gen` | 100.00% | 0.1333 | 0.2420s | 519.25 | 3.00% |
+
+The sorted 256-token configuration is the new high-accuracy recommendation. It preserves 100% schema validity on the wider 256-example check, keeps command overlap in line with the original-order baseline, and improves amortized request latency from `0.3621s` to `0.2638s` on GPU1. The seq768 sorted configuration is faster (`0.2420s`) but trims prompt context and lowers command overlap, so keep it as a speed-priority candidate until task-level planner evaluation confirms no behavioral regression.
+
+Do not use these attempted shortcuts as defaults:
+
+```text
+max_new_tokens=152/160: passed 64 examples but dropped schema on 128 examples
+dtype=fp16: dropped schema to 92.19% on the 64-example check
+max_seq_length=512: dropped schema to 97.66% and lowered command overlap on 128 examples
+max_seq_length=704: dropped schema to 98.44% on 128 examples
+```
+
 vLLM is not installed in `AgentOpti` yet:
 
 ```text
