@@ -1,6 +1,6 @@
 # Agent Planner Status
 
-Updated: 2026-06-24
+Updated: 2026-06-25
 
 ## Route Decision
 
@@ -43,7 +43,7 @@ processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd160_100k.jsonl 359
 processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_100k.jsonl 338M
 ```
 
-The current `Agent_Planner` directory is about `32G`.
+The current `Agent_Planner` directory is about `38G`, including the merged stage6 model below.
 
 ToolBench v1 files:
 
@@ -249,6 +249,7 @@ scripts/normalize_sft_data.py
 scripts/normalize_tau_trajectories.py
 scripts/build_agent_lightning_transitions.py
 scripts/train_planner_sft.py
+scripts/merge_lora_adapter.py
 scripts/launch_gpu1_sft.sh
 scripts/launch_gpu1_sft_full.sh
 scripts/evaluate_planner_sft.py
@@ -257,6 +258,39 @@ scripts/build_openclaw_no_hint_suite.py
 scripts/build_jsononly_sft_data.py
 scripts/launch_gpu1_sft_jsononly.sh
 ```
+
+## Current Fast Planner Candidate
+
+The current fast-response candidate is the merged stage6 checkpoint:
+
+```text
+adapter source: models/20260624T130000Z-qwen25-3b-gpu1-shortcmd120-action2-stage6-500/final_adapter
+merged model: models/20260625T002525Z-qwen25-3b-stage6-merged
+merge metadata: models/20260625T002525Z-qwen25-3b-stage6-merged/merge_config.json
+eval run: eval_runs/20260625T002600Z-stage6-merged-transformers-192-64gen
+```
+
+The merged model was evaluated on GPU1 with the same 64-example heldout slice and 192-token budget used for the previous stage6 adapter check:
+
+```text
+schema_valid_rate: 100.00%
+mean_ttft_seconds: 0.048273
+mean_generation_seconds: 2.115309
+mean_new_tokens: 127.5781
+mean_tokens_per_second: 60.3011
+gpu_peak_memory_mb: 6012.04
+```
+
+Compared with the stage6 LoRA adapter run (`20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen`), the merged model keeps the same compact action2 target surface while cutting mean generation time from `4.623401s` to `2.115309s` on Transformers generation.
+
+vLLM is not installed in `AgentOpti` yet:
+
+```text
+importlib.util.find_spec("vllm"): False
+pip show vllm: package not found
+```
+
+Do not treat this as a vLLM benchmark. It is a Transformers full-model benchmark after LoRA merge.
 
 ## Training Launch Attempt
 

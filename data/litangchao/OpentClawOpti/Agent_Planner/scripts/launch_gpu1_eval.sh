@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-base-vs-lora-heldout}"
 BASE_MODEL="${BASE_MODEL:-/home/litangchao/.cache/huggingface/hub/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1}"
-ADAPTER="${ADAPTER:-${ROOT}/models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter}"
+ADAPTER="${ADAPTER-${ROOT}/models/20260623T063028Z-qwen25-3b-gpu1-stream200k-5k/final_adapter}"
+MODEL_LABEL="${MODEL_LABEL:-}"
 EVAL_FILE="${EVAL_FILE:-${ROOT}/processed/qwen_terminal_toolbench_sft.jsonl}"
 OUT="${ROOT}/eval_runs/${RUN_ID}"
 LOG="${ROOT}/logs/${RUN_ID}.log"
@@ -16,7 +17,6 @@ COMMAND=(
   /home/litangchao/miniconda3/bin/conda run -n AgentOpti python
   "${ROOT}/scripts/evaluate_planner_sft.py"
   --base-model "${BASE_MODEL}"
-  --adapter "${ADAPTER}"
   --eval-file "${EVAL_FILE}"
   --output-dir "${OUT}"
   --start-line "${START_LINE:-300001}"
@@ -27,6 +27,14 @@ COMMAND=(
   --dtype "${DTYPE:-bf16}"
   --require-cuda
 )
+
+if [[ -n "${ADAPTER}" ]]; then
+  COMMAND+=(--adapter "${ADAPTER}")
+fi
+
+if [[ -n "${MODEL_LABEL}" ]]; then
+  COMMAND+=(--model-label "${MODEL_LABEL}")
+fi
 
 if [[ "${SKIP_BASE:-0}" == "1" ]]; then
   COMMAND+=(--skip-base)

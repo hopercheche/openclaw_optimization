@@ -58,9 +58,10 @@ class ModelEvalResult:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate a base planner model against a LoRA adapter.")
+    parser = argparse.ArgumentParser(description="Evaluate a planner model, optionally with a LoRA adapter.")
     parser.add_argument("--base-model", type=Path, required=True)
-    parser.add_argument("--adapter", type=Path, required=True)
+    parser.add_argument("--adapter", type=Path, default=None)
+    parser.add_argument("--model-label", default=None)
     parser.add_argument("--eval-file", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--start-line", type=int, default=300001)
@@ -94,7 +95,8 @@ def main() -> None:
     run_config = {
         "created_at": utc_now(),
         "base_model": str(args.base_model),
-        "adapter": str(args.adapter),
+        "adapter": str(args.adapter) if args.adapter else None,
+        "model_label": args.model_label,
         "eval_file": str(args.eval_file),
         "output_dir": str(args.output_dir),
         "start_line": args.start_line,
@@ -116,10 +118,14 @@ def main() -> None:
 
     results: list[ModelEvalResult] = []
     generation_rows: list[dict[str, Any]] = []
-    model_specs = []
-    if not args.skip_base:
-        model_specs.append(("base", None))
-    model_specs.append(("lora_adapter", args.adapter))
+    model_specs: list[tuple[str, Path | None]] = []
+    model_label = args.model_label or ("lora_adapter" if args.adapter else "model")
+    if args.adapter:
+        if not args.skip_base:
+            model_specs.append(("base", None))
+        model_specs.append((model_label, args.adapter))
+    else:
+        model_specs.append((model_label, None))
 
     for label, adapter_path in model_specs:
         result, rows = evaluate_model(
@@ -573,7 +579,8 @@ def render_report(metrics: dict[str, Any]) -> str:
         f"- Loss examples: {metrics['run_config']['loss_examples']}",
         f"- Generation examples: {metrics['run_config']['generation_examples']}",
         f"- Base model: `{metrics['run_config']['base_model']}`",
-        f"- Adapter: `{metrics['run_config']['adapter']}`",
+        f"- Adapter: `{metrics['run_config']['adapter'] or 'none'}`",
+        f"- Model label: `{metrics['run_config']['model_label'] or 'auto'}`",
         f"- CUDA available: {metrics['run_config']['cuda_available']}",
         f"- Device: {metrics['run_config']['device_name']}",
         "",

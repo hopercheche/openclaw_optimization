@@ -1,6 +1,6 @@
 # Agent Planner Evaluation Summary
 
-Updated: 2026-06-24
+Updated: 2026-06-25
 
 ## Large SFT Run
 
@@ -82,6 +82,7 @@ All rows below use heldout data generated from line 300001 of the original Qwen 
 | stage5 shortcmd160, short budget | `20260624T115000Z-shortcmd160-stage5-heldout-192-64gen` | 192 | 64 | 87.50% | 0.0708s | 5.6561s | 159.63 | 28.22 |
 | stage6 shortcmd120 action2 | `20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen` | 192 | 64 | 96.88% | 0.0708s | 4.6234s | 128.66 | 27.82 |
 | stage6 shortcmd120 action2, short budget | `20260624T134000Z-shortcmd120-action2-stage6-heldout-160-64gen` | 160 | 64 | 93.75% | 0.0704s | 4.5087s | 127.11 | 28.19 |
+| stage6 merged full model | `20260625T002600Z-stage6-merged-transformers-192-64gen` | 192 | 64 | 100.00% | 0.0483s | 2.1153s | 127.58 | 60.30 |
 
 Stage4 is the first checkpoint that consistently produces valid planner-shape JSON under a 256-token budget. The 64-example check is lower than the 16-example run, but still confirms a material jump from the 0-31% schema-valid range seen before the action-level rewrite.
 
@@ -90,6 +91,27 @@ Stage5 is the current best checkpoint. Filtering out commands longer than 160 ch
 The 192-token stage5 check is usable but not recommended as the default: it saves only about 0.11s versus the 256-token run while dropping schema validity from 96.88% to 87.50%.
 
 Stage6 is the new best checkpoint. Reducing the target to at most two short commands, with 120-character command keystroke filtering and 160-character analysis/plan fields, preserved 96.88% schema validity at a 192-token budget and reduced mean generation time to 4.6234s. The 160-token budget is usable but not the default because it saves only about 0.11s while dropping schema validity to 93.75%.
+
+Merging the stage6 LoRA into a full model is the current best speed path. The merged Transformers run cut mean generation time from 4.6234s to 2.1153s on the same GPU1, same 64 examples, same 192-token budget, while improving schema validity from 96.88% to 100.00%. Token throughput rose from 27.82 tok/s to 60.30 tok/s, and TTFT dropped from 0.0708s to 0.0483s.
+
+Merged checkpoint:
+
+```text
+models/20260625T002525Z-qwen25-3b-stage6-merged
+```
+
+Merge metadata:
+
+```text
+models/20260625T002525Z-qwen25-3b-stage6-merged/merge_config.json
+```
+
+vLLM is not installed in `AgentOpti`, so the merged run above is a Transformers full-model benchmark, not a vLLM serving benchmark:
+
+```text
+importlib.util.find_spec("vllm"): False
+pip show vllm: package not found
+```
 
 ### What Changed
 
@@ -115,7 +137,7 @@ The next optimization should be one of:
 ```text
 1. continue stage6 with more compact short-command rows and evaluate at 64+ generation examples each time
 2. add constrained JSON/schema decoding so near-miss generations cannot drift outside the planner schema
-3. merge the LoRA or serve it with vLLM to measure real serving latency instead of raw Transformers generation
+3. install and pin a compatible vLLM build for `AgentOpti`, then benchmark the merged full model under real serving/batched inference
 4. distill the stage6 policy into Qwen2.5-1.5B-Instruct or a smaller planner if response speed is the main constraint
 ```
 
