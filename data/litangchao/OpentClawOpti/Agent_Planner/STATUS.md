@@ -250,6 +250,7 @@ scripts/normalize_tau_trajectories.py
 scripts/build_agent_lightning_transitions.py
 scripts/train_planner_sft.py
 scripts/merge_lora_adapter.py
+scripts/benchmark_vllm_planner.py
 scripts/launch_gpu1_sft.sh
 scripts/launch_gpu1_sft_full.sh
 scripts/evaluate_planner_sft.py
@@ -290,7 +291,50 @@ importlib.util.find_spec("vllm"): False
 pip show vllm: package not found
 ```
 
-Do not treat this as a vLLM benchmark. It is a Transformers full-model benchmark after LoRA merge.
+The serving benchmark uses a separate environment so the known-good training/evaluation environment remains unchanged:
+
+```text
+name: AgentOptiVLLM
+path: /home/litangchao/miniconda3/envs/AgentOptiVLLM
+python: 3.11.15
+vllm: 0.18.1
+torch: 2.10.0+cu128
+torch_cuda: 12.8
+size: 9.5G
+```
+
+`vllm==0.23.0` was not used because the default dependency path resolved to CUDA 13 packages, while the host driver is `570.124.06`. The installed `vllm==0.18.1` path resolves to `torch==2.10.0+cu128`, which is compatible with the current driver/GPU setup.
+
+vLLM GPU smoke:
+
+```text
+CUDA_VISIBLE_DEVICES=1
+torch.cuda.is_available(): True
+device: NVIDIA L20
+vllm_version: 0.18.1
+```
+
+vLLM benchmark results on the same 64-example heldout slice:
+
+```text
+eval_run: eval_runs/20260625T010100Z-stage6-vllm-batch1-192-64gen
+batch_size: 1
+schema_valid_rate: 59.38%
+mean_amortized_request_seconds: 0.663544
+mean_new_tokens: 63.4219
+tokens_per_second: 95.5805
+```
+
+```text
+eval_run: eval_runs/20260625T010800Z-stage6-vllm-batch8-192-64gen
+batch_size: 8
+schema_valid_rate: 60.94%
+mean_amortized_request_seconds: 0.215650
+mean_new_tokens: 65.2344
+tokens_per_second: 302.5007
+```
+
+Conclusion: vLLM is connected to GPU1 and is much faster, but this stage6 checkpoint is not yet a direct vLLM replacement because vLLM decoding often terminates after about 8 tokens in the middle of the JSON object. Token-prompt input, `ignore_eos`, eos suppression, `min_tokens`, and vLLM structured JSON schema smoke tests did not recover the 100% schema-valid rate seen with Transformers merged generation. Keep the Transformers merged model as the current accuracy baseline; use vLLM only as a speed experiment or as the first pass in a future validate-and-fallback serving path.
 
 ## Training Launch Attempt
 

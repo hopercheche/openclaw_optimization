@@ -83,6 +83,8 @@ All rows below use heldout data generated from line 300001 of the original Qwen 
 | stage6 shortcmd120 action2 | `20260624T133000Z-shortcmd120-action2-stage6-heldout-192-64gen` | 192 | 64 | 96.88% | 0.0708s | 4.6234s | 128.66 | 27.82 |
 | stage6 shortcmd120 action2, short budget | `20260624T134000Z-shortcmd120-action2-stage6-heldout-160-64gen` | 160 | 64 | 93.75% | 0.0704s | 4.5087s | 127.11 | 28.19 |
 | stage6 merged full model | `20260625T002600Z-stage6-merged-transformers-192-64gen` | 192 | 64 | 100.00% | 0.0483s | 2.1153s | 127.58 | 60.30 |
+| stage6 merged vLLM batch1 | `20260625T010100Z-stage6-vllm-batch1-192-64gen` | 192 | 64 | 59.38% | n/a | 0.6635s amortized | 63.42 | 95.58 |
+| stage6 merged vLLM batch8 | `20260625T010800Z-stage6-vllm-batch8-192-64gen` | 192 | 64 | 60.94% | n/a | 0.2157s amortized | 65.23 | 302.50 |
 
 Stage4 is the first checkpoint that consistently produces valid planner-shape JSON under a 256-token budget. The 64-example check is lower than the 16-example run, but still confirms a material jump from the 0-31% schema-valid range seen before the action-level rewrite.
 
@@ -106,12 +108,16 @@ Merge metadata:
 models/20260625T002525Z-qwen25-3b-stage6-merged/merge_config.json
 ```
 
-vLLM is not installed in `AgentOpti`, so the merged run above is a Transformers full-model benchmark, not a vLLM serving benchmark:
+vLLM is intentionally installed in a separate serving environment, not in `AgentOpti`, so the merged Transformers run above remains a clean full-model benchmark:
 
 ```text
-importlib.util.find_spec("vllm"): False
-pip show vllm: package not found
+AgentOptiVLLM: vllm 0.18.1, torch 2.10.0+cu128
+AgentOpti: unchanged, torch 2.11.0+cu128
 ```
+
+The vLLM serving experiment confirms the speed path but not the accuracy path yet. Batch1 cuts amortized generation time from the Transformers merged `2.1153s` to `0.6635s`, and batch8 reaches `302.50 tok/s` with `0.2157s` amortized per request. However, schema validity drops to about 60% because vLLM often terminates after roughly 8 tokens in the middle of the JSON object. Token-prompt input, eos suppression, `ignore_eos`, `min_tokens`, and structured JSON schema smoke tests did not recover the Transformers schema-valid rate.
+
+Current recommendation: keep the merged Transformers model as the accuracy baseline. Treat vLLM as a serving-speed candidate that needs either a validate-and-fallback wrapper or another short-output fine-tuning pass that explicitly penalizes early termination under the vLLM decoding stack.
 
 ### What Changed
 
@@ -137,7 +143,7 @@ The next optimization should be one of:
 ```text
 1. continue stage6 with more compact short-command rows and evaluate at 64+ generation examples each time
 2. add constrained JSON/schema decoding so near-miss generations cannot drift outside the planner schema
-3. install and pin a compatible vLLM build for `AgentOpti`, then benchmark the merged full model under real serving/batched inference
+3. build a validate-and-fallback serving wrapper: vLLM first, then Transformers merged fallback only when the planner JSON fails schema validation
 4. distill the stage6 policy into Qwen2.5-1.5B-Instruct or a smaller planner if response speed is the main constraint
 ```
 
