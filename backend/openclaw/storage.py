@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Iterable
 
+from .context_index import ContextIndex
 from .models import AuditEvent, RunState
 
 
@@ -14,9 +15,19 @@ class RunStorage:
         self.runs_root = self.root / "runs"
         self.runs_root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._context_index: ContextIndex | None = None
 
     def run_dir(self, run_id: str) -> Path:
         return self.runs_root / run_id
+
+    def context_index_path(self) -> Path:
+        return self.root / "context_index.sqlite3"
+
+    def context_index(self) -> ContextIndex:
+        with self._lock:
+            if self._context_index is None:
+                self._context_index = ContextIndex(self.context_index_path())
+            return self._context_index
 
     def create_run(self, state: RunState) -> None:
         with self._lock:

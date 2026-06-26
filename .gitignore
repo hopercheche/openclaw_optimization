@@ -51,3 +51,14 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Local reference documents
+Midterm_Requirements_2026.pdf
+OpenClaw_Capstone_*.docx
+The Strategist*.pdf
+THE_ARCHITECT_MIDTERM_REPORT.md
+artifacts/*.sqlite3
+
+# Local generated outputs
+artifacts/
+report/

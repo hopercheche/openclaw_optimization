@@ -3,9 +3,10 @@
 OpenClawPOpti contains Capstone work for OpenClaw agent optimization. The repository currently has two implemented tracks:
 
 - Direction 1, The Strategist: a rule-based model router that routes requests to small / mid / large model tiers.
+- Direction 2, The Architect: a local SQLite context index that archives completed run context and injects source-backed snippets into later planner runs.
 - Direction 3, The Planner: an audit-first AgentScope 2 planner runtime with `greedy_topk`, `audit_astar`, and `audit_reflexion` planner strategies plus benchmark evidence.
 
-It does not yet prove all three Capstone directions end to end. Direction 2, The Architect, is still only represented by context-boundary plumbing in the planner runtime.
+It does not yet prove all three Capstone directions end to end. Direction 2 now has a retrieval/injection prototype, but it still needs broader benchmark evidence and model-backed AS2 prompt integration.
 
 ## Current Fit Against The Capstone
 
@@ -14,7 +15,7 @@ It does not yet prove all three Capstone directions end to end. Direction 2, The
 | Baseline OpenClaw Agent | Partial | The deterministic fallback planner provides a stable baseline loop with fixed candidate generation, scoring, permission checks, and audit logs. |
 | Optimized OpenClaw Agent | Partial | The AS2-backed path embeds `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, `PermissionContext`, and `ReActConfig`; model-backed candidate generation is available when provider credentials are configured. |
 | Direction 1: model routing | Implemented | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
-| Direction 2: progressive context | Partially implemented boundary | The planner runtime has workspace-scoped tools and audit-safe context boundaries, but no retrieval, memory block, or compaction benchmark yet. |
+| Direction 2: progressive context | Prototype implemented | `backend/openclaw/context_index.py` archives completed run context into SQLite FTS, retrieves prior snippets at run start, and records `context_retrieval`, `context_injection`, and `context_archived` audit events. |
 | Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search; `audit_reflexion` adds deterministic reflection repair inspired by LATS, Reflexion, Self-Refine, ToolChain*, ToT, and AFlow. Full MCTS rollout/backpropagation remains a later extension. |
 | Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk`, `audit_astar`, and `audit_reflexion` on 88 tasks with dev/holdout splits, including converted PhoneHarness tasks plus a multi-source generalization suite from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
 
@@ -256,5 +257,5 @@ python3 -m pytest tests/test_mvp.py
 1. Run the model matrix with real provider keys and compare model-backed candidate generation against deterministic fallback.
 2. Extend planner benchmark tasks with more repo-grounded and model-backed cases.
 3. Add true LATS/MCTS rollout and backpropagation only if it improves over `audit_reflexion` under the same holdout protocol.
-4. Add progressive context injection using memory blocks, retrieval, and compaction.
+4. Extend progressive context injection with AS2 prompt support, semantic retrieval, and compaction-vs-index benchmarks.
 5. Strengthen Strategist routing with feature-based, cost-aware, or cascade routing.

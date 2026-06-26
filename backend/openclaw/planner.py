@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Callable
 
 from .as2_adapter import AS2Status, build_user_message_snapshot, map_local_event_to_as2
-from .as2_runtime import generate_as2_openai_plan
 from .audit import render_audit_markdown
+from .as2_runtime import generate_as2_openai_plan
 from .models import AuditEvent, CandidateStep, RunState, utc_now
 from .permissions import PermissionEngine
 from .planner_profile_model import predict_goal_profile
@@ -51,7 +51,8 @@ class LocalAuditPlanner:
             "planner_strategy": state.planner_strategy,
         })
 
-        candidates = self._generate_candidates_from_runtime(state)
+        retrieved_context = self._retrieve_context(state)
+        candidates = self._generate_candidates_from_runtime(state, retrieved_context)
         for candidate in candidates:
             self._emit(state, "candidate_step", f"Candidate generated: {candidate.title}", {
                 "candidate": candidate.to_dict(),
@@ -137,6 +138,7 @@ class LocalAuditPlanner:
         state.updated_at = utc_now()
         state.event_count = len(self.storage.load_events(state.run_id)) + 1
         self.storage.save_state(state)
+        self._archive_context(state)
         self._emit(state, "run_completed", "Run completed and audit report is ready.", {
             "status": state.status,
         })
@@ -149,12 +151,51 @@ class LocalAuditPlanner:
         self.storage.save_state(state)
         return state
 
-    def _generate_candidates_from_runtime(self, state: RunState) -> list[CandidateStep]:
+    def _retrieve_context(self, state: RunState) -> list[dict]:
+        index = self.storage.context_index()
+        records = index.search(state.goal, limit=5, exclude_run_id=state.run_id)
+        snippets = index.render_snippets(records, snippet_limit=500)
+        self._emit(state, "context_retrieval", "Searched archival context index for relevant prior runs.", {
+            "query": state.goal.strip(),
+            "hit_count": len(snippets),
+            "record_keys": [item["record_key"] for item in snippets],
+            "source_run_ids": sorted({item["run_id"] for item in snippets}),
+            "fts_enabled": index.fts_enabled,
+        })
+        if snippets:
+            self._emit(state, "context_injection", "Structured archival context snippets prepared for planner use.", {
+                "snippet_count": len(snippets),
+                "snippets": snippets,
+            })
+        return snippets
+
+    def _archive_context(self, state: RunState) -> None:
+        try:
+            events = self.storage.load_events(state.run_id)
+            records = self.storage.context_index().archive_run(state, events)
+        except Exception as exc:  # pragma: no cover - defensive persistence guard
+            self._emit(state, "context_archive_failed", "Failed to archive run context for future recall.", {
+                "error": repr(exc),
+            })
+            return
+
+        self._emit(state, "context_archived", "Archived completed run context for future retrieval.", {
+            "record_count": len(records),
+            "record_keys": [record.record_key for record in records],
+            "kinds": [record.kind for record in records],
+            "index_path": str(self.storage.context_index_path()),
+        })
+
+    def _generate_candidates_from_runtime(
+        self,
+        state: RunState,
+        retrieved_context: list[dict] | None = None,
+    ) -> list[CandidateStep]:
         if not self.as2_status.model_ready:
             self._emit(state, "as2_model_skipped", "AS2 model planner skipped because no provider key is configured.", {
                 "model_ready": False,
             })
-            return self._generate_candidates(state.goal)
+            return self._generate_candidates(state.goal, retrieved_context)
 
         self._emit(state, "as2_model_started", "Requesting candidate plan from AS2 OpenAI-compatible Agent.", {
             "model_provider": self.as2_status.model_provider,
@@ -181,14 +222,14 @@ class LocalAuditPlanner:
                 "candidate_count": len(result.candidates),
                 "architecture": result.architecture,
             })
-            return result.candidates
+            return self._merge_context_candidates(result.candidates, retrieved_context)
 
         self._emit(state, "as2_model_fallback", "Falling back to deterministic planner candidates.", {
             "model_name": result.model_name,
             "error": result.error,
             "architecture": result.architecture,
         })
-        return self._generate_candidates(state.goal)
+        return self._generate_candidates(state.goal, retrieved_context)
 
     def _emit(self, state: RunState, event_type: str, message: str, data: dict | None = None) -> AuditEvent:
         event_data = data or {}
@@ -209,7 +250,11 @@ class LocalAuditPlanner:
             self.event_sink(event)
         return event
 
-    def _generate_candidates(self, goal: str) -> list[CandidateStep]:
+    def _generate_candidates(
+        self,
+        goal: str,
+        retrieved_context: list[dict] | None = None,
+    ) -> list[CandidateStep]:
         lower_goal = goal.lower()
         mutating_goal = any(term in lower_goal for term in ["write", "edit", "deploy", "delete", "remove", "优化", "修改"])
         production_goal = any(term in lower_goal for term in ["prod", "production", "上线", "部署"])
@@ -308,9 +353,32 @@ class LocalAuditPlanner:
                 mutates_workspace=True,
             ),
         ]
+        candidates = self._merge_context_candidates(candidates, retrieved_context)
         if mobile_goal or _needs_external_workflow_candidates(goal, execution_tools):
             candidates.extend(_external_workflow_candidates(execution_tools, goal))
         return candidates
+
+    def _merge_context_candidates(
+        self,
+        candidates: list[CandidateStep],
+        retrieved_context: list[dict] | None,
+    ) -> list[CandidateStep]:
+        if not retrieved_context:
+            return candidates
+        context_candidate = CandidateStep(
+            title="Read archived context snippets",
+            action=(
+                "Review source-backed snippets retrieved from prior OpenClaw runs before "
+                "selecting or executing planner actions."
+            ),
+            tool_name="audit_reader",
+            rationale="Long-range context recall prevents older run evidence from being lost to compaction.",
+            impact=4,
+            evidence_value=5,
+            reversibility=5,
+            risk=1,
+        )
+        return [context_candidate, *candidates]
 
     def _simulate_tool(self, step: CandidateStep, workspace_path: str) -> str:
         workspace = Path(workspace_path)
@@ -327,6 +395,8 @@ class LocalAuditPlanner:
             return "Verifier produced critique notes for completed and blocked steps."
         if step.tool_name == "goal_analyzer":
             return "Goal boundary recorded for audit replay."
+        if step.tool_name == "audit_reader":
+            return "Archived context snippets were reviewed as source-backed planner evidence."
         if step.tool_name == "safety_guard":
             return "Safety guard checked external-state, privacy, and confirmation policy before execution."
         if step.tool_name == "mobile_gui_runner":
