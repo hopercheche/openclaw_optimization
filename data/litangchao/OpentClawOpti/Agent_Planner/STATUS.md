@@ -1,6 +1,6 @@
 # Agent Planner Status
 
-Updated: 2026-06-25
+Updated: 2026-06-26
 
 ## Route Decision
 
@@ -210,6 +210,37 @@ nvidia-smi works on the host when commands are run outside the Codex sandbox
 
 The PyTorch runtime mismatch is fixed by using cu128. GPU training commands must be run outside the default Codex sandbox so the process can see `/dev/nvidia*`.
 
+Additional serving environments tested:
+
+```text
+AgentOptiVLLM:
+  path: /home/litangchao/miniconda3/envs/AgentOptiVLLM
+  vllm: 0.18.1
+  torch: 2.10.0+cu128
+  status: usable on GPU1 outside the Codex sandbox
+
+AgentOptiSGLang:
+  path: /home/litangchao/miniconda3/envs/AgentOptiSGLang
+  sglang: 0.5.14
+  torch: 2.11.0+cu130
+  status: rejected on this host because driver 570.124.06 exposes CUDA 12.8, not CUDA 13
+
+AgentOptiSGLang058:
+  path: /home/litangchao/miniconda3/envs/AgentOptiSGLang058
+  sglang: 0.5.8
+  torch: 2.9.1+cu128
+  status: CUDA smoke test passed on NVIDIA L20; SGLang /generate serving tested on GPU1
+```
+
+SGLang serving notes:
+
+```text
+launch fix: prepend /home/litangchao/miniconda3/envs/AgentOptiSGLang058/bin to PATH
+reason: flashinfer JIT needs the conda env's ninja executable
+tokenizer fix: use tokenizer_compat because newer tokenizer_config extra_special_tokens is a list
+context note: SGLang rejects prompt_token_budget=1024 with max_new_tokens=256 at context_length=1280, so use prompt1000/256 or prompt1024/224
+```
+
 Host GPU remediation notes:
 
 ```text
@@ -251,6 +282,7 @@ scripts/build_agent_lightning_transitions.py
 scripts/train_planner_sft.py
 scripts/merge_lora_adapter.py
 scripts/benchmark_vllm_planner.py
+scripts/benchmark_http_planner.py
 scripts/benchmark_transformers_batch_planner.py
 scripts/launch_gpu1_sft.sh
 scripts/launch_gpu1_sft_full.sh
@@ -295,12 +327,12 @@ The best current serving/evaluation configuration is the merged model with batch
 | Transformers merged | `20260625T035500Z-stage6-transformers-batch32-192-64gen` | 32 | 98.44% | 0.6790s | 182.94 | 9645.99 |
 | vLLM | `20260625T010800Z-stage6-vllm-batch8-192-64gen` | 8 | 60.94% | 0.2157s | 302.50 | n/a |
 
-Conclusion: use `batch_size=16` for the high-accuracy path. It preserves the 100% schema-valid rate of the single-request Transformers baseline while improving amortized request latency by about `4.74x` and token throughput by about `4.61x`. Batch32 is not recommended because it is both slower than batch16 and drops schema validity to 98.44%.
+Conclusion from the initial 64-example batch check: use `batch_size=16` before prompt sorting. It preserves the 100% schema-valid rate of the single-request Transformers baseline while improving amortized request latency by about `4.74x` and token throughput by about `4.61x`. The early unsorted batch32 run was not recommended because it was slower than batch16 and dropped schema validity to 98.44%.
 
-The next batch16 optimization is prompt-length batching. It keeps the model/runtime on Transformers but groups similarly sized prompts before generation, which reduces left-padding work inside each batch. The high-accuracy default now uses:
+The next Transformers optimization is prompt-length batching. It keeps the model/runtime on Transformers but groups similarly sized prompts before generation, which reduces left-padding work inside each batch. The high-accuracy default now uses:
 
 ```text
-batch_size: 16
+batch_size: 32
 max_seq_length: 1024
 max_new_tokens: 256
 dtype: bf16
@@ -314,17 +346,22 @@ sort_by_prompt_length: true
 | batch16, original order, 192 tokens | `20260625T054500Z-stage6-transformers-batch16-192-256gen` | 100.00% | 0.1393 | 0.3621s | 347.79 | 21.54% |
 | batch16, sorted prompts, 192 tokens | `20260625T054000Z-stage6-transformers-batch16-192-sort-256gen` | 99.61% | 0.1398 | 0.2598s | 487.94 | 3.41% |
 | batch16, sorted prompts, 256 tokens | `20260625T055000Z-stage6-transformers-batch16-256-sort-256gen` | 100.00% | 0.1399 | 0.2638s | 481.10 | 3.41% |
+| batch16, sorted prompts, 224 tokens | `20260626T093000Z-stage6-transformers-batch16-224-sort-256gen` | 99.61% | 0.1398 | 0.2634s | 481.76 | 3.41% |
+| batch32, sorted prompts, 256 tokens | `20260626T093500Z-stage6-transformers-batch32-256-sort-256gen` | 100.00% | 0.1445 | 0.2173s | 577.51 | 6.71% |
+| batch64, sorted prompts, 256 tokens | `20260626T094000Z-stage6-transformers-batch64-256-sort-256gen` | 100.00% | 0.1427 | 0.2244s | 566.87 | 12.83% |
 | speed candidate: seq768, sorted prompts, 256 tokens | `20260625T055500Z-stage6-transformers-batch16-256-seq768-sort-256gen` | 100.00% | 0.1333 | 0.2420s | 519.25 | 3.00% |
 
-The sorted 256-token configuration is the new high-accuracy recommendation. It preserves 100% schema validity on the wider 256-example check, keeps command overlap in line with the original-order baseline, and improves amortized request latency from `0.3621s` to `0.2638s` on GPU1. The seq768 sorted configuration is faster (`0.2420s`) but trims prompt context and lowers command overlap, so keep it as a speed-priority candidate until task-level planner evaluation confirms no behavioral regression.
+The sorted batch32 256-token configuration is the new high-accuracy recommendation. It preserves 100% schema validity on the wider 256-example check, improves command overlap from `0.1399` to `0.1445` versus the sorted batch16 path, and improves amortized request latency from `0.2638s` to `0.2173s` on GPU1. Batch64 is not better because padding rises to 12.83%. The seq768 sorted configuration is faster than batch16 (`0.2420s`) but slower than sorted batch32 and lowers command overlap, so keep it as a speed-priority candidate only if task-level planner evaluation confirms no behavioral regression.
 
 Do not use these attempted shortcuts as defaults:
 
 ```text
 max_new_tokens=152/160: passed 64 examples but dropped schema on 128 examples
+max_new_tokens=224: saves almost nothing and drops schema to 99.61% on 256 examples
 dtype=fp16: dropped schema to 92.19% on the 64-example check
 max_seq_length=512: dropped schema to 97.66% and lowered command overlap on 128 examples
 max_seq_length=704: dropped schema to 98.44% on 128 examples
+batch64 sorted: preserves schema but is slower than batch32 because prompt padding rises
 ```
 
 vLLM is not installed in `AgentOpti` yet:
@@ -678,4 +715,4 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
 5. Attach automatic verifier rewards.
 6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
-7. For speed, keep the merged model on Transformers batch16 as the current high-accuracy serving path. Treat vLLM as a separate validate-and-fallback or early-termination repair project before using it as a direct replacement.
+7. For speed, keep the merged model on Transformers batch32 sorted prompts as the current high-accuracy serving path, with batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.
