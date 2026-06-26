@@ -334,9 +334,12 @@ The next Transformers optimization is prompt-length batching. It keeps the model
 ```text
 batch_size: 32
 max_seq_length: 1024
-max_new_tokens: 256
+max_new_tokens: 320
 dtype: bf16
+attn_implementation: sdpa
+device_placement: cuda
 sort_by_prompt_length: true
+extra_output_policy: compact short-command clamp
 ```
 
 256-example GPU1 comparison:
@@ -348,10 +351,23 @@ sort_by_prompt_length: true
 | batch16, sorted prompts, 256 tokens | `20260625T055000Z-stage6-transformers-batch16-256-sort-256gen` | 100.00% | 0.1399 | 0.2638s | 481.10 | 3.41% |
 | batch16, sorted prompts, 224 tokens | `20260626T093000Z-stage6-transformers-batch16-224-sort-256gen` | 99.61% | 0.1398 | 0.2634s | 481.76 | 3.41% |
 | batch32, sorted prompts, 256 tokens | `20260626T093500Z-stage6-transformers-batch32-256-sort-256gen` | 100.00% | 0.1445 | 0.2173s | 577.51 | 6.71% |
+| batch48, sorted prompts, 256 tokens | `20260626T100000Z-stage6-transformers-batch48-256-sort-256gen` | 100.00% | 0.1350 | 0.2324s | 543.62 | 9.01% |
 | batch64, sorted prompts, 256 tokens | `20260626T094000Z-stage6-transformers-batch64-256-sort-256gen` | 100.00% | 0.1427 | 0.2244s | 566.87 | 12.83% |
+| batch32, seq960, sorted prompts, 256 tokens | `20260626T100500Z-stage6-transformers-batch32-256-seq960-sort-256gen` | 100.00% | 0.1298 | 0.2176s | 578.28 | 6.75% |
 | speed candidate: seq768, sorted prompts, 256 tokens | `20260625T055500Z-stage6-transformers-batch16-256-seq768-sort-256gen` | 100.00% | 0.1333 | 0.2420s | 519.25 | 3.00% |
 
-The sorted batch32 256-token configuration is the new high-accuracy recommendation. It preserves 100% schema validity on the wider 256-example check, improves command overlap from `0.1399` to `0.1445` versus the sorted batch16 path, and improves amortized request latency from `0.2638s` to `0.2173s` on GPU1. Batch64 is not better because padding rises to 12.83%. The seq768 sorted configuration is faster than batch16 (`0.2420s`) but slower than sorted batch32 and lowers command overlap, so keep it as a speed-priority candidate only if task-level planner evaluation confirms no behavioral regression.
+The sorted batch32 256-token configuration remains the best pure speed profile on the 256-example check. It preserves 100% schema validity, improves command overlap from `0.1399` to `0.1445` versus the sorted batch16 path, and improves amortized request latency from `0.2638s` to `0.2173s` on GPU1. Batch48 and batch64 are not better because padding and decode work rise. The seq960/seq768 variants are not better because they trim context and lower command overlap.
+
+512-example GPU1 validation:
+
+| Config | Eval Run | Schema Valid | Command Overlap | Amortized Request | Tok/s | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| batch32, SDPA/CUDA, 256 tokens | `20260626T102500Z-stage6-transformers-batch32-256-sort-sdpa-cuda-512gen` | 99.61% | 0.1434 | 0.2187s | 577.34 | fastest 512-example profile |
+| batch16, SDPA/CUDA, 256 tokens | `20260626T103000Z-stage6-transformers-batch16-256-sort-sdpa-cuda-512gen` | 99.80% | 0.1414 | 0.2541s | 499.25 | lower-memory fallback |
+| batch32, compact policy, 256 tokens | `20260626T103500Z-stage6-transformers-batch32-256-sort-sdpa-cuda-clamp-512gen` | 99.80% | 0.1520 | 0.2284s | 591.82 | quality-positive but one truncation remains |
+| batch32, compact policy, 320 tokens | `20260626T104000Z-stage6-transformers-batch32-320-sort-sdpa-cuda-clamp-512gen` | 100.00% | 0.1520 | 0.2298s | 588.63 | current high-reliability default |
+
+The compact policy fixes the residual long-command failure mode where the model starts writing validation scripts such as multiline `python3 -c` checks and hits the generation cap. Raising the cap from 256 to 320 adds only about `0.0013s` versus the compact-policy 256-token check because nearly all examples still stop early. It restores 100% schema validity on 512 examples and keeps latency below the batch16 fallback.
 
 Do not use these attempted shortcuts as defaults:
 
@@ -361,6 +377,9 @@ max_new_tokens=224: saves almost nothing and drops schema to 99.61% on 256 examp
 dtype=fp16: dropped schema to 92.19% on the 64-example check
 max_seq_length=512: dropped schema to 97.66% and lowered command overlap on 128 examples
 max_seq_length=704: dropped schema to 98.44% on 128 examples
+max_seq_length=960: preserves schema on 256 examples but lowers command overlap to 0.1298
+dynamic max-batch-prompt-tokens=32768: preserves schema but slows to 0.2406s on 256 examples
+batch48 sorted: preserves schema but is slower and lowers command overlap
 batch64 sorted: preserves schema but is slower than batch32 because prompt padding rises
 ```
 
@@ -715,4 +734,4 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
 5. Attach automatic verifier rewards.
 6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
-7. For speed, keep the merged model on Transformers batch32 sorted prompts as the current high-accuracy serving path, with batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.
+7. For speed and reliability, keep the merged model on Transformers batch32 sorted prompts with the compact output policy, SDPA, direct CUDA placement, and a 320-token cap as the current high-reliability serving path. Use batch32/256 without the compact policy as the fastest profile, and batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.

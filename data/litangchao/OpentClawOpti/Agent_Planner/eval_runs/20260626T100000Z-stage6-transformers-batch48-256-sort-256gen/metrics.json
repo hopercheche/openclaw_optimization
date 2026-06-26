@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-06-26T13:24:21.289086Z",
+  "run_config": {
+    "created_at": "2026-06-26T13:23:21.732534Z",
+    "model": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260625T002525Z-qwen25-3b-stage6-merged",
+    "tokenizer": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260625T002525Z-qwen25-3b-stage6-merged",
+    "eval_file": "data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_eval_line300001_1k.jsonl",
+    "output_dir": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260626T100000Z-stage6-transformers-batch48-256-sort-256gen",
+    "start_line": 1,
+    "generation_examples": 256,
+    "max_seq_length": 1024,
+    "max_new_tokens": 256,
+    "batch_size": 48,
+    "dtype": "bf16",
+    "require_cuda": true,
+    "sort_by_prompt_length": true,
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "device_name": "NVIDIA L20",
+    "torch_version": "2.11.0+cu128",
+    "torch_cuda": "12.8"
+  },
+  "results": [
+    {
+      "label": "transformers_batch48",
+      "generation_examples": 256,
+      "valid_json_rate": 1.0,
+      "schema_valid_rate": 1.0,
+      "required_field_rate": 1.0,
+      "command_array_rate": 1.0,
+      "command_overlap_mean": 0.135,
+      "task_complete_bool_rate": 1.0,
+      "total_generation_seconds": 59.538722,
+      "sum_batch_generation_seconds": 59.487754,
+      "mean_batch_generation_seconds": 9.914626,
+      "mean_amortized_request_seconds": 0.232374,
+      "mean_new_tokens": 126.3242,
+      "total_new_tokens": 32339,
+      "tokens_per_second": 543.6245,
+      "prompt_tokens_mean": 797.1992,
+      "prompt_tokens_max": 1016,
+      "prompt_padding_tokens": 20205,
+      "prompt_padding_fraction": 0.0901,
+      "gpu_peak_memory_mb": 11516.53
+    }
+  ]
+}

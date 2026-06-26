@@ -1,0 +1,61 @@
+{
+  "created_at": "2026-06-26T13:31:46.426997Z",
+  "run_config": {
+    "created_at": "2026-06-26T13:30:50.784145Z",
+    "model": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260625T002525Z-qwen25-3b-stage6-merged",
+    "tokenizer": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260625T002525Z-qwen25-3b-stage6-merged",
+    "eval_file": "data/litangchao/OpentClawOpti/Agent_Planner/processed/qwen_terminal_toolbench_sft_jsononly_strict_shortcmd120_action2_eval_line300001_1k.jsonl",
+    "output_dir": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260626T102000Z-stage6-transformers-batch32-256-sort-sdpa-cuda-256gen",
+    "start_line": 1,
+    "generation_examples": 256,
+    "max_seq_length": 1024,
+    "max_new_tokens": 256,
+    "batch_size": 32,
+    "max_batch_prompt_tokens": null,
+    "actual_batch_count": 8,
+    "actual_batch_sizes": [
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32,
+      32
+    ],
+    "dtype": "bf16",
+    "attn_implementation": "sdpa",
+    "device_placement": "cuda",
+    "require_cuda": true,
+    "sort_by_prompt_length": true,
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "device_name": "NVIDIA L20",
+    "torch_version": "2.11.0+cu128",
+    "torch_cuda": "12.8"
+  },
+  "results": [
+    {
+      "label": "transformers_batch32",
+      "generation_examples": 256,
+      "valid_json_rate": 1.0,
+      "schema_valid_rate": 1.0,
+      "required_field_rate": 1.0,
+      "command_array_rate": 1.0,
+      "command_overlap_mean": 0.1445,
+      "task_complete_bool_rate": 1.0,
+      "total_generation_seconds": 55.62524,
+      "sum_batch_generation_seconds": 55.571047,
+      "mean_batch_generation_seconds": 6.946381,
+      "mean_amortized_request_seconds": 0.217074,
+      "mean_new_tokens": 125.5195,
+      "total_new_tokens": 32133,
+      "tokens_per_second": 578.2328,
+      "prompt_tokens_mean": 797.1992,
+      "prompt_tokens_max": 1016,
+      "prompt_padding_tokens": 14669,
+      "prompt_padding_fraction": 0.0671,
+      "gpu_peak_memory_mb": 9751.08
+    }
+  ]
+}
