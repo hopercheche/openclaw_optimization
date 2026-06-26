@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import re
+import shutil
 import statistics
 import time
 from dataclasses import asdict, dataclass
@@ -45,6 +46,7 @@ def main() -> None:
     parser.add_argument("--generation-examples", type=int, default=64)
     parser.add_argument("--max-model-len", type=int, default=1024)
     parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--prompt-token-budget", type=int, default=None)
     parser.add_argument("--min-new-tokens", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
@@ -54,6 +56,19 @@ def main() -> None:
     parser.add_argument("--ignore-eos", action="store_true")
     parser.add_argument("--suppress-eos", action="store_true")
     parser.add_argument("--structured-json", action="store_true")
+    parser.add_argument(
+        "--strict-schema",
+        action="store_true",
+        help="Use additionalProperties=false in the guided JSON schema.",
+    )
+    parser.add_argument(
+        "--require-task-complete",
+        action="store_true",
+        help="Require task_complete in the guided JSON schema.",
+    )
+    parser.add_argument("--presence-penalty", type=float, default=0.0)
+    parser.add_argument("--frequency-penalty", type=float, default=0.0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--require-cuda", action="store_true")
     args = parser.parse_args()
 
@@ -68,13 +83,24 @@ def main() -> None:
         raise SystemExit(f"No valid examples found in {args.eval_file} starting at line {args.start_line}")
 
     tokenizer_path = args.tokenizer or args.model
+    effective_tokenizer_path = prepare_tokenizer_path(tokenizer_path, args.output_dir)
     tokenizer = AutoTokenizer.from_pretrained(
-        str(tokenizer_path),
+        str(effective_tokenizer_path),
         trust_remote_code=True,
         local_files_only=True,
+        extra_special_tokens={},
     )
+    prompt_token_budget = args.prompt_token_budget
+    if prompt_token_budget is None:
+        prompt_token_budget = args.max_model_len - args.max_new_tokens
+    if prompt_token_budget < 1:
+        raise SystemExit("--prompt-token-budget or --max-model-len must leave at least one prompt token.")
+    if prompt_token_budget + args.max_new_tokens > args.max_model_len:
+        raise SystemExit(
+            "--prompt-token-budget + --max-new-tokens must be <= --max-model-len for vLLM."
+        )
     prompt_token_ids = [
-        truncate_prompt_ids(tokenizer, example.prompt, max_prompt_tokens=max(1, args.max_model_len - 8))
+        truncate_prompt_ids(tokenizer, example.prompt, max_prompt_tokens=prompt_token_budget)
         for example in examples
     ]
     prompts = (
@@ -87,12 +113,14 @@ def main() -> None:
         "created_at": utc_now(),
         "model": str(args.model),
         "tokenizer": str(tokenizer_path),
+        "effective_tokenizer": str(effective_tokenizer_path),
         "eval_file": str(args.eval_file),
         "output_dir": str(args.output_dir),
         "start_line": args.start_line,
         "generation_examples": len(examples),
         "max_model_len": args.max_model_len,
         "max_new_tokens": args.max_new_tokens,
+        "prompt_token_budget": prompt_token_budget,
         "min_new_tokens": args.min_new_tokens,
         "batch_size": args.batch_size,
         "dtype": args.dtype,
@@ -102,6 +130,11 @@ def main() -> None:
         "ignore_eos": args.ignore_eos,
         "suppress_eos": args.suppress_eos,
         "structured_json": args.structured_json,
+        "strict_schema": args.strict_schema,
+        "require_task_complete": args.require_task_complete,
+        "presence_penalty": args.presence_penalty,
+        "frequency_penalty": args.frequency_penalty,
+        "repetition_penalty": args.repetition_penalty,
         "require_cuda": args.require_cuda,
         "cuda_available": torch.cuda.is_available(),
         "cuda_device_count": torch.cuda.device_count(),
@@ -118,7 +151,7 @@ def main() -> None:
 
     llm = LLM(
         model=str(args.model),
-        tokenizer=str(tokenizer_path),
+        tokenizer=str(effective_tokenizer_path),
         trust_remote_code=True,
         dtype=args.dtype,
         max_model_len=args.max_model_len,
@@ -131,7 +164,13 @@ def main() -> None:
         logit_bias = {int(token_id): -100.0 for token_id in stop_ids if token_id is not None}
 
     structured_outputs = (
-        StructuredOutputsParams(json=planner_json_schema(), disable_additional_properties=False)
+        StructuredOutputsParams(
+            json=planner_json_schema(
+                strict=args.strict_schema,
+                require_task_complete=args.require_task_complete,
+            ),
+            disable_additional_properties=args.strict_schema,
+        )
         if args.structured_json
         else None
     )
@@ -142,6 +181,9 @@ def main() -> None:
         min_tokens=args.min_new_tokens,
         stop=None if args.ignore_eos else [IM_END],
         ignore_eos=args.ignore_eos,
+        presence_penalty=args.presence_penalty,
+        frequency_penalty=args.frequency_penalty,
+        repetition_penalty=args.repetition_penalty,
         skip_special_tokens=False,
         spaces_between_special_tokens=False,
         logit_bias=logit_bias,
@@ -174,6 +216,8 @@ def main() -> None:
             generated = completion.text
             token_ids = getattr(completion, "token_ids", None) or []
             new_tokens = len(token_ids)
+            finish_reason = getattr(completion, "finish_reason", None)
+            stop_reason = getattr(completion, "stop_reason", None)
             parsed = parse_planner_json(generated)
             schema = score_schema(parsed)
             expected_commands = command_tokens(example.expected_json)
@@ -196,6 +240,8 @@ def main() -> None:
                 "batch_generation_seconds": round(elapsed, 6),
                 "amortized_request_seconds": round(elapsed / max(len(batch_prompts), 1), 6),
                 "new_tokens": new_tokens,
+                "finish_reason": finish_reason,
+                "stop_reason": stop_reason,
                 "schema": schema,
                 "command_overlap": round(command_overlap, 4),
                 "expected_commands": sorted(expected_commands),
@@ -267,6 +313,35 @@ def load_examples(path: Path, start_line: int, limit: int) -> list[EvalExample]:
             if len(examples) >= limit:
                 break
     return examples
+
+
+def prepare_tokenizer_path(tokenizer_path: Path, output_dir: Path) -> Path:
+    """Create a tiny tokenizer-only copy when newer configs break older serving envs."""
+    config_path = tokenizer_path / "tokenizer_config.json"
+    if not config_path.exists():
+        return tokenizer_path
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config.get("extra_special_tokens"), list):
+        return tokenizer_path
+
+    compat_dir = output_dir / "tokenizer_compat"
+    compat_dir.mkdir(parents=True, exist_ok=True)
+    for filename in (
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "chat_template.jinja",
+    ):
+        source = tokenizer_path / filename
+        if source.exists():
+            shutil.copy2(source, compat_dir / filename)
+    config["extra_special_tokens"] = {}
+    (compat_dir / "tokenizer_config.json").write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return compat_dir
 
 
 def split_sft_text(text: str) -> tuple[str, str] | None:
@@ -386,7 +461,19 @@ def token_jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left | right)
 
 
-def planner_json_schema() -> dict[str, Any]:
+def planner_json_schema(*, strict: bool = False, require_task_complete: bool = False) -> dict[str, Any]:
+    command_schema = {
+        "type": "object",
+        "properties": {
+            "keystrokes": {"type": "string"},
+            "duration": {"type": "number"},
+        },
+        "required": ["keystrokes"],
+        "additionalProperties": not strict,
+    }
+    required = ["analysis", "plan", "commands"]
+    if require_task_complete:
+        required.append("task_complete")
     return {
         "type": "object",
         "properties": {
@@ -394,20 +481,12 @@ def planner_json_schema() -> dict[str, Any]:
             "plan": {"type": "string"},
             "commands": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "keystrokes": {"type": "string"},
-                        "duration": {"type": "number"},
-                    },
-                    "required": ["keystrokes"],
-                    "additionalProperties": True,
-                },
+                "items": command_schema,
             },
             "task_complete": {"type": "boolean"},
         },
-        "required": ["analysis", "plan", "commands"],
-        "additionalProperties": True,
+        "required": required,
+        "additionalProperties": not strict,
     }
 
 
@@ -433,8 +512,12 @@ def render_report(metrics: dict[str, Any]) -> str:
         f"- Tokenizer: `{config['tokenizer']}`",
         f"- Eval file: `{config['eval_file']}`",
         f"- Generation examples: {config['generation_examples']}",
+        f"- Max model len: {config['max_model_len']}",
         f"- Max new tokens: {config['max_new_tokens']}",
+        f"- Prompt token budget: {config['prompt_token_budget']}",
         f"- Batch size: {config['batch_size']}",
+        f"- Frequency penalty: {config['frequency_penalty']}",
+        f"- Repetition penalty: {config['repetition_penalty']}",
         f"- vLLM: {config['vllm_version']}",
         f"- Torch: {config['torch_version']} / CUDA {config['torch_cuda']}",
         f"- Device: {config['device_name']}",

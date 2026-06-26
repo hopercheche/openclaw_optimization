@@ -1,0 +1,8 @@
+name: AgentOptiSGLang058
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - sglang==0.5.8
