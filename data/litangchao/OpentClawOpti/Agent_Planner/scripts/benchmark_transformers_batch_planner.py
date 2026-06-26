@@ -32,10 +32,33 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--start-line", type=int, default=1)
     parser.add_argument("--generation-examples", type=int, default=64)
+    parser.add_argument(
+        "--extra-output-policy",
+        default=None,
+        help="Optional extra instruction inserted before the assistant generation marker.",
+    )
     parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--max-new-tokens", type=int, default=192)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument(
+        "--max-batch-prompt-tokens",
+        type=int,
+        default=None,
+        help="Optional padded prompt-token budget per batch; keeps batch-size as the hard sequence cap.",
+    )
     parser.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
+    parser.add_argument(
+        "--attn-implementation",
+        choices=["eager", "sdpa", "flash_attention_2"],
+        default=None,
+        help="Optional Transformers attention backend override.",
+    )
+    parser.add_argument(
+        "--device-placement",
+        choices=["auto", "cuda"],
+        default="auto",
+        help="Use Transformers device_map=auto or place the full model directly on the visible CUDA device.",
+    )
     parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument(
         "--sort-by-prompt-length",
@@ -48,6 +71,8 @@ def main() -> None:
         raise SystemExit("CUDA is required for this benchmark, but torch cannot see a CUDA device.")
     if args.batch_size < 1:
         raise SystemExit("--batch-size must be >= 1")
+    if args.max_batch_prompt_tokens is not None and args.max_batch_prompt_tokens < 1:
+        raise SystemExit("--max-batch-prompt-tokens must be >= 1")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     examples = load_examples(args.eval_file, args.start_line, args.generation_examples)
@@ -64,7 +89,7 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
 
-    model = load_model(args.model, args.dtype)
+    model = load_model(args.model, args.dtype, args.attn_implementation, args.device_placement)
     device = next(model.parameters()).device
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
@@ -74,9 +99,20 @@ def main() -> None:
         tokenizer=tokenizer,
         max_prompt_tokens=max(1, args.max_seq_length - 8),
         sort_by_prompt_length=args.sort_by_prompt_length,
+        extra_output_policy=args.extra_output_policy,
+    )
+    prepared_batches = make_batches(
+        prepared_examples,
+        batch_size=args.batch_size,
+        max_batch_prompt_tokens=args.max_batch_prompt_tokens,
     )
     prompt_lengths = [len(item["prompt_ids"]) for item in prepared_examples]
-    padding_stats = summarize_padding(prompt_lengths, args.batch_size)
+    batch_prompt_lengths = [
+        [len(item["prompt_ids"]) for item in batch_items]
+        for batch_items in prepared_batches
+    ]
+    padding_stats = summarize_padding(batch_prompt_lengths)
+    actual_batch_sizes = [len(batch_items) for batch_items in prepared_batches]
 
     run_config = {
         "created_at": utc_now(),
@@ -86,10 +122,16 @@ def main() -> None:
         "output_dir": str(args.output_dir),
         "start_line": args.start_line,
         "generation_examples": len(examples),
+        "extra_output_policy": args.extra_output_policy,
         "max_seq_length": args.max_seq_length,
         "max_new_tokens": args.max_new_tokens,
         "batch_size": args.batch_size,
+        "max_batch_prompt_tokens": args.max_batch_prompt_tokens,
+        "actual_batch_count": len(prepared_batches),
+        "actual_batch_sizes": actual_batch_sizes,
         "dtype": args.dtype,
+        "attn_implementation": args.attn_implementation,
+        "device_placement": args.device_placement,
         "require_cuda": args.require_cuda,
         "sort_by_prompt_length": args.sort_by_prompt_length,
         "cuda_available": torch.cuda.is_available(),
@@ -115,8 +157,7 @@ def main() -> None:
     command_overlaps: list[float] = []
 
     benchmark_started = time.perf_counter()
-    for start in range(0, len(prepared_examples), args.batch_size):
-        batch_items = prepared_examples[start:start + args.batch_size]
+    for batch_items in prepared_batches:
         batch_examples = [item["example"] for item in batch_items]
         batch_prompt_ids = [item["prompt_ids"] for item in batch_items]
         input_tensor, attention_mask = pad_batch(
@@ -222,19 +263,33 @@ def main() -> None:
     print(json.dumps(metrics, ensure_ascii=False, indent=2))
 
 
-def load_model(model_path: Path, dtype: str):
+def load_model(model_path: Path, dtype: str, attn_implementation: str | None, device_placement: str):
     torch_dtype = {
         "bf16": torch.bfloat16,
         "fp16": torch.float16,
         "fp32": torch.float32,
     }[dtype]
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_path),
-        torch_dtype=torch_dtype,
-        device_map="auto" if torch.cuda.is_available() else None,
-        trust_remote_code=True,
-        local_files_only=True,
-    )
+    model_kwargs = {}
+    if attn_implementation:
+        model_kwargs["attn_implementation"] = attn_implementation
+    if device_placement == "cuda" and torch.cuda.is_available():
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
+            local_files_only=True,
+            **model_kwargs,
+        )
+        model.to("cuda")
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_path),
+            torch_dtype=torch_dtype,
+            device_map="auto" if torch.cuda.is_available() else None,
+            trust_remote_code=True,
+            local_files_only=True,
+            **model_kwargs,
+        )
     model.eval()
     return model
 
@@ -245,12 +300,17 @@ def prepare_examples(
     tokenizer,
     max_prompt_tokens: int,
     sort_by_prompt_length: bool,
+    extra_output_policy: str | None,
 ) -> list[dict[str, Any]]:
     prepared = [
         {
             "original_index": index,
             "example": example,
-            "prompt_ids": truncate_prompt(tokenizer, example.prompt, max_prompt_tokens=max_prompt_tokens),
+            "prompt_ids": truncate_prompt(
+                tokenizer,
+                apply_extra_output_policy(example.prompt, extra_output_policy),
+                max_prompt_tokens=max_prompt_tokens,
+            ),
         }
         for index, example in enumerate(examples)
     ]
@@ -259,11 +319,56 @@ def prepare_examples(
     return prepared
 
 
-def summarize_padding(prompt_lengths: list[int], batch_size: int) -> dict[str, Any]:
+def apply_extra_output_policy(prompt: str, extra_output_policy: str | None) -> str:
+    if not extra_output_policy:
+        return prompt
+    marker = "<|im_start|>assistant\n"
+    policy = extra_output_policy.strip()
+    if not policy:
+        return prompt
+    insertion = f"\nAdditional planner constraints:\n{policy}\n"
+    if prompt.endswith(marker):
+        return prompt[:-len(marker)] + insertion + marker
+    return prompt + insertion
+
+
+def make_batches(
+    prepared_examples: list[dict[str, Any]],
+    *,
+    batch_size: int,
+    max_batch_prompt_tokens: int | None,
+) -> list[list[dict[str, Any]]]:
+    if max_batch_prompt_tokens is None:
+        return [
+            prepared_examples[start:start + batch_size]
+            for start in range(0, len(prepared_examples), batch_size)
+        ]
+
+    batches: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_max = 0
+    for item in prepared_examples:
+        item_length = len(item["prompt_ids"])
+        next_max = max(current_max, item_length)
+        next_size = len(current) + 1
+        would_exceed_count = next_size > batch_size
+        would_exceed_tokens = next_max * next_size > max_batch_prompt_tokens
+        if current and (would_exceed_count or would_exceed_tokens):
+            batches.append(current)
+            current = []
+            current_max = 0
+            next_max = item_length
+        current.append(item)
+        current_max = max(current_max, item_length)
+    if current:
+        batches.append(current)
+    return batches
+
+
+def summarize_padding(batch_prompt_lengths: list[list[int]]) -> dict[str, Any]:
     total_padded = 0
     total_real = 0
-    for start in range(0, len(prompt_lengths), batch_size):
-        batch_lengths = prompt_lengths[start:start + batch_size]
+    for batch_lengths in batch_prompt_lengths:
         if not batch_lengths:
             continue
         total_real += sum(batch_lengths)
@@ -315,6 +420,10 @@ def render_report(metrics: dict[str, Any]) -> str:
         f"- Generation examples: {config['generation_examples']}",
         f"- Max new tokens: {config['max_new_tokens']}",
         f"- Batch size: {config['batch_size']}",
+        f"- Max batch prompt tokens: {config['max_batch_prompt_tokens']}",
+        f"- Actual batch count: {config['actual_batch_count']}",
+        f"- Device placement: {config['device_placement']}",
+        f"- Extra output policy: {bool(config['extra_output_policy'])}",
         f"- Sort by prompt length: {config['sort_by_prompt_length']}",
         f"- Torch: {config['torch_version']} / CUDA {config['torch_cuda']}",
         f"- Device: {config['device_name']}",
