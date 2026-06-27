@@ -37,8 +37,19 @@ def main() -> None:
         default=None,
         help="Optional extra instruction inserted before the assistant generation marker.",
     )
+    parser.add_argument(
+        "--retry-invalid-extra-output-policy",
+        default=None,
+        help="Optional extra output policy used to retry only first-pass schema-invalid generations.",
+    )
     parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument(
+        "--retry-invalid-max-new-tokens",
+        type=int,
+        default=None,
+        help="Max new tokens for invalid-output retries. Defaults to --max-new-tokens.",
+    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument(
         "--max-batch-prompt-tokens",
@@ -73,6 +84,8 @@ def main() -> None:
         raise SystemExit("--batch-size must be >= 1")
     if args.max_batch_prompt_tokens is not None and args.max_batch_prompt_tokens < 1:
         raise SystemExit("--max-batch-prompt-tokens must be >= 1")
+    if args.retry_invalid_max_new_tokens is not None and args.retry_invalid_max_new_tokens < 1:
+        raise SystemExit("--retry-invalid-max-new-tokens must be >= 1")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     examples = load_examples(args.eval_file, args.start_line, args.generation_examples)
@@ -123,8 +136,10 @@ def main() -> None:
         "start_line": args.start_line,
         "generation_examples": len(examples),
         "extra_output_policy": args.extra_output_policy,
+        "retry_invalid_extra_output_policy": args.retry_invalid_extra_output_policy,
         "max_seq_length": args.max_seq_length,
         "max_new_tokens": args.max_new_tokens,
+        "retry_invalid_max_new_tokens": args.retry_invalid_max_new_tokens,
         "batch_size": args.batch_size,
         "max_batch_prompt_tokens": args.max_batch_prompt_tokens,
         "actual_batch_count": len(prepared_batches),
@@ -146,17 +161,95 @@ def main() -> None:
     )
     write_jsonl(args.output_dir / "eval_samples.jsonl", [asdict(example) for example in examples])
 
+    benchmark_started = time.perf_counter()
+    rows, batch_seconds = run_generation_batches(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        prepared_batches=prepared_batches,
+        max_new_tokens=args.max_new_tokens,
+        pass_name="base",
+    )
+
+    total_generation_seconds = time.perf_counter() - benchmark_started
+    total_examples = len(examples) or 1
+    base_result = summarize_rows(
+        rows,
+        label=f"transformers_batch{args.batch_size}",
+        total_examples=total_examples,
+        total_generation_seconds=total_generation_seconds,
+        batch_seconds=batch_seconds,
+        prompt_lengths=prompt_lengths,
+        padding_stats=padding_stats,
+    )
+
+    final_rows = rows
+    retry_rows: list[dict[str, Any]] = []
+    retry_batch_seconds: list[float] = []
+    if args.retry_invalid_extra_output_policy:
+        retry_items = build_retry_items(
+            examples,
+            rows,
+            tokenizer=tokenizer,
+            max_prompt_tokens=max(1, args.max_seq_length - 8),
+            extra_output_policy=args.retry_invalid_extra_output_policy,
+        )
+        if retry_items:
+            retry_batches = make_batches(
+                retry_items,
+                batch_size=args.batch_size,
+                max_batch_prompt_tokens=args.max_batch_prompt_tokens,
+            )
+            retry_rows, retry_batch_seconds = run_generation_batches(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                prepared_batches=retry_batches,
+                max_new_tokens=args.retry_invalid_max_new_tokens or args.max_new_tokens,
+                pass_name="retry_invalid",
+            )
+            final_rows = merge_retry_rows(rows, retry_rows)
+
+    final_batch_seconds = batch_seconds + retry_batch_seconds
+    final_total_generation_seconds = time.perf_counter() - benchmark_started
+    final_result = summarize_rows(
+        final_rows,
+        label=f"transformers_batch{args.batch_size}_final",
+        total_examples=total_examples,
+        total_generation_seconds=final_total_generation_seconds,
+        batch_seconds=final_batch_seconds,
+        prompt_lengths=prompt_lengths,
+        padding_stats=padding_stats,
+    )
+    final_result["retry_invalid_count"] = len(retry_rows)
+    final_result["retry_generation_seconds"] = round(sum(retry_batch_seconds), 6)
+    metrics = {
+        "created_at": utc_now(),
+        "run_config": run_config,
+        "results": [base_result, final_result],
+    }
+    (args.output_dir / "metrics.json").write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    write_jsonl(args.output_dir / "generations.jsonl", final_rows)
+    if retry_rows:
+        write_jsonl(args.output_dir / "retry_generations.jsonl", retry_rows)
+    (args.output_dir / "report.md").write_text(render_report(metrics), encoding="utf-8")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+
+
+def run_generation_batches(
+    *,
+    model,
+    tokenizer,
+    device,
+    prepared_batches: list[list[dict[str, Any]]],
+    max_new_tokens: int,
+    pass_name: str,
+) -> tuple[list[dict[str, Any]], list[float]]:
     rows: list[dict[str, Any]] = []
     batch_seconds: list[float] = []
-    new_token_counts: list[int] = []
-    valid_json_count = 0
-    schema_valid_count = 0
-    command_array_count = 0
-    task_complete_bool_count = 0
-    field_scores: list[float] = []
-    command_overlaps: list[float] = []
-
-    benchmark_started = time.perf_counter()
     for batch_items in prepared_batches:
         batch_examples = [item["example"] for item in batch_items]
         batch_prompt_ids = [item["prompt_ids"] for item in batch_items]
@@ -172,7 +265,7 @@ def main() -> None:
             output = model.generate(
                 input_ids=input_tensor,
                 attention_mask=attention_mask,
-                max_new_tokens=args.max_new_tokens,
+                max_new_tokens=max_new_tokens,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id,
@@ -197,15 +290,8 @@ def main() -> None:
             predicted_commands = command_tokens(parsed)
             command_overlap = token_jaccard(expected_commands, predicted_commands)
 
-            valid_json_count += int(parsed is not None)
-            schema_valid_count += int(schema["schema_valid"])
-            command_array_count += int(schema["commands_valid"])
-            task_complete_bool_count += int(schema["task_complete_bool"])
-            field_scores.append(schema["required_field_fraction"])
-            command_overlaps.append(command_overlap)
-            new_token_counts.append(len(new_ids))
-
             rows.append({
+                "pass": pass_name,
                 "original_index": item["original_index"],
                 "line_number": example.line_number,
                 "source": example.source,
@@ -221,19 +307,44 @@ def main() -> None:
                 "predicted_commands": sorted(predicted_commands),
                 "generated_text": generated,
             })
+    return rows, batch_seconds
 
-    total_generation_seconds = time.perf_counter() - benchmark_started
-    total_examples = len(examples) or 1
+
+def summarize_rows(
+    rows: list[dict[str, Any]],
+    *,
+    label: str,
+    total_examples: int,
+    total_generation_seconds: float,
+    batch_seconds: list[float],
+    prompt_lengths: list[int],
+    padding_stats: dict[str, Any],
+) -> dict[str, Any]:
+    field_scores = [row["schema"]["required_field_fraction"] for row in rows]
+    command_overlaps = [row["command_overlap"] for row in rows]
+    new_token_counts = [row["new_tokens"] for row in rows]
     total_new_tokens = sum(new_token_counts)
-    result = {
-        "label": f"transformers_batch{args.batch_size}",
-        "generation_examples": len(examples),
-        "valid_json_rate": round(valid_json_count / total_examples, 4),
-        "schema_valid_rate": round(schema_valid_count / total_examples, 4),
+    return {
+        "label": label,
+        "generation_examples": len(rows),
+        "valid_json_rate": round(
+            sum(1 for row in rows if row["schema"]["valid_json"]) / total_examples,
+            4,
+        ),
+        "schema_valid_rate": round(
+            sum(1 for row in rows if row["schema"]["schema_valid"]) / total_examples,
+            4,
+        ),
         "required_field_rate": round(statistics.mean(field_scores) if field_scores else 0.0, 4),
-        "command_array_rate": round(command_array_count / total_examples, 4),
+        "command_array_rate": round(
+            sum(1 for row in rows if row["schema"]["commands_valid"]) / total_examples,
+            4,
+        ),
         "command_overlap_mean": round(statistics.mean(command_overlaps) if command_overlaps else 0.0, 4),
-        "task_complete_bool_rate": round(task_complete_bool_count / total_examples, 4),
+        "task_complete_bool_rate": round(
+            sum(1 for row in rows if row["schema"]["task_complete_bool"]) / total_examples,
+            4,
+        ),
         "total_generation_seconds": round(total_generation_seconds, 6),
         "sum_batch_generation_seconds": round(sum(batch_seconds), 6),
         "mean_batch_generation_seconds": round(statistics.mean(batch_seconds) if batch_seconds else 0.0, 6),
@@ -249,18 +360,46 @@ def main() -> None:
         if torch.cuda.is_available()
         else None,
     }
-    metrics = {
-        "created_at": utc_now(),
-        "run_config": run_config,
-        "results": [result],
-    }
-    (args.output_dir / "metrics.json").write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    write_jsonl(args.output_dir / "generations.jsonl", rows)
-    (args.output_dir / "report.md").write_text(render_report(metrics), encoding="utf-8")
-    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+
+
+def build_retry_items(
+    examples,
+    rows: list[dict[str, Any]],
+    *,
+    tokenizer,
+    max_prompt_tokens: int,
+    extra_output_policy: str,
+) -> list[dict[str, Any]]:
+    retry_items: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda item: item["original_index"]):
+        if row["schema"]["schema_valid"]:
+            continue
+        original_index = row["original_index"]
+        example = examples[original_index]
+        retry_items.append({
+            "original_index": original_index,
+            "example": example,
+            "prompt_ids": truncate_prompt(
+                tokenizer,
+                apply_extra_output_policy(example.prompt, extra_output_policy),
+                max_prompt_tokens=max_prompt_tokens,
+            ),
+        })
+    return retry_items
+
+
+def merge_retry_rows(base_rows: list[dict[str, Any]], retry_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    retry_by_index = {row["original_index"]: row for row in retry_rows}
+    merged: list[dict[str, Any]] = []
+    for row in base_rows:
+        retry_row = retry_by_index.get(row["original_index"])
+        if retry_row is None:
+            merged.append(row)
+        else:
+            updated = dict(retry_row)
+            updated["retried_from"] = row
+            merged.append(updated)
+    return merged
 
 
 def load_model(model_path: Path, dtype: str, attn_implementation: str | None, device_placement: str):
@@ -409,7 +548,9 @@ def trim_after_generation_stop(new_ids: list[int], *, eos_token_id: int | None, 
 
 def render_report(metrics: dict[str, Any]) -> str:
     config = metrics["run_config"]
-    result = metrics["results"][0]
+    base_result = metrics["results"][0]
+    result = metrics["results"][-1]
+    retry_count = result.get("retry_invalid_count", 0)
     return "\n".join([
         "# Agent Planner Transformers Batch Benchmark",
         "",
@@ -419,6 +560,7 @@ def render_report(metrics: dict[str, Any]) -> str:
         f"- Eval file: `{config['eval_file']}`",
         f"- Generation examples: {config['generation_examples']}",
         f"- Max new tokens: {config['max_new_tokens']}",
+        f"- Retry invalid max new tokens: {config['retry_invalid_max_new_tokens']}",
         f"- Batch size: {config['batch_size']}",
         f"- Max batch prompt tokens: {config['max_batch_prompt_tokens']}",
         f"- Actual batch count: {config['actual_batch_count']}",
@@ -430,11 +572,16 @@ def render_report(metrics: dict[str, Any]) -> str:
         "",
         "## Results",
         "",
-        "| Schema valid | Mean amortized request | Mean tokens | Tok/s | Total gen seconds | Peak GPU MB |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: |",
-        f"| {result['schema_valid_rate']:.2%} | {result['mean_amortized_request_seconds']:.4f}s | "
+        "| Result | Schema valid | Mean amortized request | Command overlap | Mean tokens | Tok/s | Retry count |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| base | {base_result['schema_valid_rate']:.2%} | "
+        f"{base_result['mean_amortized_request_seconds']:.4f}s | "
+        f"{base_result['command_overlap_mean']:.4f} | {base_result['mean_new_tokens']:.2f} | "
+        f"{base_result['tokens_per_second']:.2f} | 0 |",
+        f"| final | {result['schema_valid_rate']:.2%} | {result['mean_amortized_request_seconds']:.4f}s | "
+        f"{result['command_overlap_mean']:.4f} | "
         f"{result['mean_new_tokens']:.2f} | {result['tokens_per_second']:.2f} | "
-        f"{result['sum_batch_generation_seconds']:.4f}s | {result['gpu_peak_memory_mb']} |",
+        f"{retry_count} |",
         "",
         "## Prompt Padding",
         "",
