@@ -1,6 +1,6 @@
 # Agent Planner Status
 
-Updated: 2026-06-26
+Updated: 2026-06-27
 
 ## Route Decision
 
@@ -334,12 +334,13 @@ The next Transformers optimization is prompt-length batching. It keeps the model
 ```text
 batch_size: 32
 max_seq_length: 1024
-max_new_tokens: 320
+max_new_tokens: 256
 dtype: bf16
 attn_implementation: sdpa
 device_placement: cuda
 sort_by_prompt_length: true
-extra_output_policy: compact short-command clamp
+retry_invalid_extra_output_policy: hard short-command repair clamp
+retry_invalid_max_new_tokens: 272
 ```
 
 256-example GPU1 comparison:
@@ -365,9 +366,22 @@ The sorted batch32 256-token configuration remains the best pure speed profile o
 | batch32, SDPA/CUDA, 256 tokens | `20260626T102500Z-stage6-transformers-batch32-256-sort-sdpa-cuda-512gen` | 99.61% | 0.1434 | 0.2187s | 577.34 | fastest 512-example profile |
 | batch16, SDPA/CUDA, 256 tokens | `20260626T103000Z-stage6-transformers-batch16-256-sort-sdpa-cuda-512gen` | 99.80% | 0.1414 | 0.2541s | 499.25 | lower-memory fallback |
 | batch32, compact policy, 256 tokens | `20260626T103500Z-stage6-transformers-batch32-256-sort-sdpa-cuda-clamp-512gen` | 99.80% | 0.1520 | 0.2284s | 591.82 | quality-positive but one truncation remains |
-| batch32, compact policy, 320 tokens | `20260626T104000Z-stage6-transformers-batch32-320-sort-sdpa-cuda-clamp-512gen` | 100.00% | 0.1520 | 0.2298s | 588.63 | current high-reliability default |
+| batch32, compact policy, 320 tokens | `20260626T104000Z-stage6-transformers-batch32-320-sort-sdpa-cuda-clamp-512gen` | 100.00% | 0.1520 | 0.2298s | 588.63 | superseded by medium policy/retry profiles |
 
 The compact policy fixes the residual long-command failure mode where the model starts writing validation scripts such as multiline `python3 -c` checks and hits the generation cap. Raising the cap from 256 to 320 adds only about `0.0013s` versus the compact-policy 256-token check because nearly all examples still stop early. It restores 100% schema validity on 512 examples and keeps latency below the batch16 fallback.
+
+2026-06-27 1k GPU1 validation:
+
+| Config | Eval Run | Schema Valid | Command Overlap | Amortized Request | Tok/s | Retry Count | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| short compact policy, 288 tokens | `20260627T000500Z-stage6-transformers-batch32-288-sort-sdpa-cuda-shortclamp-512gen` | 99.61% | 0.1318 | 0.2584s | 510.99 | 0 | rejected: too terse, worse quality and speed |
+| medium compact policy, 272 tokens | `20260627T002000Z-stage6-transformers-batch32-272-sort-sdpa-cuda-midclamp-512gen` | 100.00% | 0.1595 | 0.2266s | 595.19 | 0 | good no-retry compact profile |
+| medium compact policy, seq1088 | `20260627T002500Z-stage6-transformers-batch32-272-seq1088-sort-sdpa-cuda-midclamp-512gen` | 100.00% | 0.1546 | 0.2167s | 623.24 | 0 | speed candidate, lower overlap |
+| medium compact policy, seq1056 | `20260627T003000Z-stage6-transformers-batch32-272-seq1056-sort-sdpa-cuda-midclamp-512gen` | 99.41% | 0.1535 | 0.2383s | 571.56 | 0 | rejected |
+| fast first pass + hard retry | `20260627T004500Z-stage6-transformers-batch32-256-fast-retry-hardclamp272-1kgen` | 100.00% | 0.1525 | 0.2120s | 594.42 | 3 | current default |
+| medium compact + hard retry | `20260627T005500Z-stage6-transformers-batch32-272-midclamp-retry-hardclamp-1kgen` | 100.00% | 0.1598 | 0.2304s | 584.44 | 2 | quality-priority profile |
+
+The new default is selective repair: run the fast 256-token profile first and retry only schema-invalid generations with a stricter no-validation/no-script repair prompt. On the full 1k heldout file, the first pass reached 99.70% schema validity at `0.2093s` amortized; retrying the three invalid generations restored 100.00% schema validity at `0.2120s`. This is faster than applying the compact policy to every request. Use the global medium compact policy plus hard retry when command overlap is more important than latency.
 
 Do not use these attempted shortcuts as defaults:
 
@@ -378,7 +392,9 @@ dtype=fp16: dropped schema to 92.19% on the 64-example check
 max_seq_length=512: dropped schema to 97.66% and lowered command overlap on 128 examples
 max_seq_length=704: dropped schema to 98.44% on 128 examples
 max_seq_length=960: preserves schema on 256 examples but lowers command overlap to 0.1298
+max_seq_length=1056: drops schema to 99.41% on 512 examples
 dynamic max-batch-prompt-tokens=32768: preserves schema but slows to 0.2406s on 256 examples
+short compact policy: drops schema to 99.61%, lowers overlap to 0.1318, and slows to 0.2584s
 batch48 sorted: preserves schema but is slower and lowers command overlap
 batch64 sorted: preserves schema but is slower than batch32 because prompt padding rises
 ```
@@ -734,4 +750,4 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 4. Build an AgentScope 2.0 rollout runner that emits planner transitions.
 5. Attach automatic verifier rewards.
 6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
-7. For speed and reliability, keep the merged model on Transformers batch32 sorted prompts with the compact output policy, SDPA, direct CUDA placement, and a 320-token cap as the current high-reliability serving path. Use batch32/256 without the compact policy as the fastest profile, and batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.
+7. For speed and reliability, keep the merged model on Transformers batch32 sorted prompts with SDPA, direct CUDA placement, a 256-token first pass, and selective hard retry for schema-invalid outputs. Use global medium compact policy plus hard retry as the quality-priority profile, and batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.

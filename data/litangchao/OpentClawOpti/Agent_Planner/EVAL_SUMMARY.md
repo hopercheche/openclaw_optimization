@@ -1,6 +1,6 @@
 # Agent Planner Evaluation Summary
 
-Updated: 2026-06-26
+Updated: 2026-06-27
 
 ## Large SFT Run
 
@@ -97,6 +97,11 @@ All rows below use heldout data generated from line 300001 of the original Qwen 
 | stage6 merged Transformers batch32, SDPA/CUDA 512-example fast check | `20260626T102500Z-stage6-transformers-batch32-256-sort-sdpa-cuda-512gen` | 256 | 512 | 99.61% | n/a | 0.2187s amortized | 126.25 | 577.34 |
 | stage6 merged Transformers batch16, SDPA/CUDA 512-example fallback check | `20260626T103000Z-stage6-transformers-batch16-256-sort-sdpa-cuda-512gen` | 256 | 512 | 99.80% | n/a | 0.2541s amortized | 126.88 | 499.25 |
 | stage6 merged Transformers batch32, compact policy 320-token 512-example check | `20260626T104000Z-stage6-transformers-batch32-320-sort-sdpa-cuda-clamp-512gen` | 320 | 512 | 100.00% | n/a | 0.2298s amortized | 135.25 | 588.63 |
+| stage6 merged Transformers batch32, short policy negative check | `20260627T000500Z-stage6-transformers-batch32-288-sort-sdpa-cuda-shortclamp-512gen` | 288 | 512 | 99.61% | n/a | 0.2584s amortized | 132.03 | 510.99 |
+| stage6 merged Transformers batch32, medium compact policy | `20260627T002000Z-stage6-transformers-batch32-272-sort-sdpa-cuda-midclamp-512gen` | 272 | 512 | 100.00% | n/a | 0.2266s amortized | 134.90 | 595.19 |
+| stage6 merged Transformers batch32, medium compact seq1088 candidate | `20260627T002500Z-stage6-transformers-batch32-272-seq1088-sort-sdpa-cuda-midclamp-512gen` | 272 | 512 | 100.00% | n/a | 0.2167s amortized | 135.06 | 623.24 |
+| stage6 merged Transformers batch32, fast + selective hard retry | `20260627T004500Z-stage6-transformers-batch32-256-fast-retry-hardclamp272-1kgen` | 256 + retry 272 | 1000 | 100.00% | n/a | 0.2120s amortized | 126.00 | 594.42 |
+| stage6 merged Transformers batch32, medium compact + selective hard retry | `20260627T005500Z-stage6-transformers-batch32-272-midclamp-retry-hardclamp-1kgen` | 272 + retry 272 | 1000 | 100.00% | n/a | 0.2304s amortized | 134.67 | 584.44 |
 | stage6 merged vLLM batch1 | `20260625T010100Z-stage6-vllm-batch1-192-64gen` | 192 | 64 | 59.38% | n/a | 0.6635s amortized | 63.42 | 95.58 |
 | stage6 merged vLLM batch8 | `20260625T010800Z-stage6-vllm-batch8-192-64gen` | 192 | 64 | 60.94% | n/a | 0.2157s amortized | 65.23 | 302.50 |
 | stage6 merged vLLM context1280 batch16 text prompt | `20260626T084500Z-stage6-vllm-context1280-batch16-textprompt-256-256gen` | 256 | 256 | 97.66% | n/a | 0.1712s amortized | 108.34 | 632.74 |
@@ -117,7 +122,9 @@ Batched Transformers generation is the current best high-accuracy serving path. 
 
 The Transformers path was improved again by prompt-length batching. Sorting prompts by token length before batching reduces left-padding work while keeping the same model and decoding stack. On a wider 256-example check, the original-order batch16 baseline with `max_new_tokens=192` kept 100% schema validity at 0.3621s amortized per request. Batch16 sorted with `max_new_tokens=256` kept 100% schema validity, kept command overlap essentially unchanged (`0.1399` vs `0.1393`), and cut amortized request latency to 0.2638s. Batch32 sorted with `max_new_tokens=256` kept 100% schema validity, improved command overlap to `0.1445`, and cut amortized request latency to 0.2173s. Batch48 and batch64 were both slower than batch32, and `max_seq_length=960` kept schema but lowered command overlap to `0.1298`, so neither should replace batch32.
 
-A wider 512-example check exposed a residual long-command truncation failure mode. Batch32 sorted with explicit `attn_implementation=sdpa` and direct CUDA placement remained fast at `0.2187s` amortized, but schema validity dropped to 99.61% because two examples started writing long validation scripts and hit the 256-token cap. Batch16 on the same 512 examples reached 99.80% schema validity but was slower at `0.2541s`. Adding a compact output policy that discourages validation scripts/multiline commands, plus raising `max_new_tokens` to 320, restored 100.00% schema validity on the 512-example check, improved command overlap to `0.1520`, and kept latency at `0.2298s`.
+A wider 512-example check exposed a residual long-command truncation failure mode. Batch32 sorted with explicit `attn_implementation=sdpa` and direct CUDA placement remained fast at `0.2187s` amortized, but schema validity dropped to 99.61% because two examples started writing long validation scripts and hit the 256-token cap. Batch16 on the same 512 examples reached 99.80% schema validity but was slower at `0.2541s`. A medium compact policy worked better than the first long policy: `max_new_tokens=272` restored 100.00% schema validity on the 512-example check, improved command overlap to `0.1595`, and kept latency at `0.2266s`. An overly short policy was rejected because it dropped schema to 99.61%, lowered command overlap to `0.1318`, and slowed to `0.2584s`.
+
+The strongest production-style optimization is selective repair. The fast profile (`batch_size=32`, `max_seq_length=1024`, `max_new_tokens=256`, `bf16`, `sdpa`, direct CUDA placement, prompt-length sorting) is used first. Only schema-invalid outputs are retried with a stricter repair policy and a 272-token budget. On the full 1k heldout file, the first pass reached 99.70% schema validity at `0.2093s` amortized; retrying only three invalid examples restored 100.00% schema validity at `0.2120s` amortized. A quality-priority profile that applies the medium compact policy globally and then retries invalid outputs also reached 100.00% schema validity, with higher command overlap (`0.1598` vs `0.1525`) but slower latency (`0.2304s`).
 
 Rejected serving shortcuts: `max_new_tokens=152/160` looked fine on 64 examples but dropped schema validity on 128 examples; `fp16` dropped schema validity to 92.19%; `max_seq_length=512` and `704` were faster in some checks but lost schema validity or command overlap.
 
@@ -150,8 +157,11 @@ Serving route decision table:
 
 | Route | Examples | Schema Valid | Command Overlap | Amortized Request | Tok/s | Decision |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Transformers batch32 compact policy 320 | 512 | 100.00% | 0.1520 | 0.2298s | 588.63 | current high-reliability default |
-| Transformers batch32 SDPA/CUDA fast | 512 | 99.61% | 0.1434 | 0.2187s | 577.34 | speed profile |
+| Transformers batch32 fast + selective hard retry | 1000 | 100.00% | 0.1525 | 0.2120s | 594.42 | current default |
+| Transformers batch32 compact + selective hard retry | 1000 | 100.00% | 0.1598 | 0.2304s | 584.44 | quality-priority profile |
+| Transformers batch32 medium compact policy | 512 | 100.00% | 0.1595 | 0.2266s | 595.19 | no-retry compact profile |
+| Transformers batch32 compact policy 320 | 512 | 100.00% | 0.1520 | 0.2298s | 588.63 | superseded by medium policy |
+| Transformers batch32 SDPA/CUDA fast | 512 | 99.61% | 0.1434 | 0.2187s | 577.34 | first pass for selective retry |
 | Transformers batch16 SDPA/CUDA fallback | 512 | 99.80% | 0.1414 | 0.2541s | 499.25 | lower-memory fallback |
 | Transformers batch32 sorted | 256 | 100.00% | 0.1445 | 0.2173s | 577.51 | older 256-example fast check |
 | Transformers batch64 sorted | 256 | 100.00% | 0.1427 | 0.2244s | 566.87 | slower than batch32 |
@@ -160,7 +170,7 @@ Serving route decision table:
 | SGLang 0.5.8 default sampling | 128 | 98.44% | 0.0856 | 0.1260s | 872.10 | fastest, quality gap too large |
 | SGLang 0.5.8 greedy prompt1024/max224 | 128 | 96.09% | 0.1013 | 0.1280s | 833.54 | not better than default |
 
-Current recommendation: keep the merged Transformers model with `batch_size=32`, prompt-length sorting, `max_seq_length=1024`, `max_new_tokens=320`, `bf16`, `attn_implementation=sdpa`, direct CUDA placement, and the compact output policy as the active high-reliability route. Use batch32 without the compact policy as the speed profile when 99.61% schema validity on the 512-example slice is acceptable, and use batch16 sorted as the lower-memory fallback. Treat vLLM context1280 and SGLang 0.5.8 as speed-priority serving candidates only after task-level validation or service-stack-specific fine-tuning. They are promising for throughput, but neither preserves the current command-overlap quality.
+Current recommendation: keep the merged Transformers model with `batch_size=32`, prompt-length sorting, `max_seq_length=1024`, `max_new_tokens=256`, `bf16`, `attn_implementation=sdpa`, direct CUDA placement, and selective retry as the active default. Retry only schema-invalid outputs with the hard repair policy and a 272-token cap. Use the global medium compact policy plus the same retry for quality-priority runs, and use batch16 sorted as the lower-memory fallback. Treat vLLM context1280 and SGLang 0.5.8 as speed-priority serving candidates only after task-level validation or service-stack-specific fine-tuning. They are promising for throughput, but neither preserves the current command-overlap quality.
 
 ### What Changed
 
@@ -179,14 +189,14 @@ This made the model stop spending most of the token budget on hidden reasoning a
 
 ### Next Direction
 
-Do not replace the current OpenClaw planner with this checkpoint yet. Stage6 is now a stronger policy candidate for compact next-actions, and the merged batch32 compact-policy path brings amortized request latency down to 0.2298s on GPU1 while preserving 100% schema validity on the 512-example check, but it still needs runtime integration and task-level evaluation before replacing the deterministic planner.
+Do not replace the current OpenClaw planner with this checkpoint yet. Stage6 is now a stronger policy candidate for compact next-actions, and the merged batch32 selective-retry path brings amortized request latency down to 0.2120s on GPU1 while preserving 100% schema validity on the full 1k heldout file, but it still needs runtime integration and task-level evaluation before replacing the deterministic planner.
 
 The next optimization should be one of:
 
 ```text
 1. continue stage6 with more compact short-command rows and evaluate at 64+ generation examples each time
 2. train or distill against the target serving stack, especially vLLM/SGLang, because decoding-stack differences change command quality even when schema is mostly valid
-3. wire the merged Transformers batch32 compact-policy path into a planner-serving wrapper with schema validation and batch16 fallback
+3. wire the merged Transformers batch32 selective-retry path into a planner-serving wrapper with schema validation and batch16 fallback
 4. distill the stage6 policy into Qwen2.5-1.5B-Instruct or a smaller planner if response speed is the main constraint
 5. revisit speculative decoding or SGLang RadixAttention only after the serving-stack quality gap is closed
 ```
