@@ -1,0 +1,136 @@
+{
+  "created_at": "2026-06-27T04:35:11.712843Z",
+  "generations": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260627T004500Z-stage6-transformers-batch32-256-fast-retry-hardclamp272-1kgen/generations.jsonl",
+  "total_rows": 1000,
+  "long_command_chars": 120,
+  "low_overlap_threshold": 0.05,
+  "label_counts": {
+    "complete_with_commands": 15,
+    "long_command": 23,
+    "low_command_overlap": 426,
+    "multiline_command": 15,
+    "ok": 513,
+    "script_like_command": 62,
+    "validation_only_command": 67
+  },
+  "label_rates": {
+    "complete_with_commands": 0.015,
+    "long_command": 0.023,
+    "low_command_overlap": 0.426,
+    "multiline_command": 0.015,
+    "ok": 0.513,
+    "script_like_command": 0.062,
+    "validation_only_command": 0.067
+  },
+  "schema_valid_rate": 1.0,
+  "low_overlap_rate": 0.426,
+  "long_command_rate": 0.023,
+  "validation_only_command_rate": 0.067,
+  "mean_command_overlap": 0.1525,
+  "mean_max_command_chars": 38.359,
+  "p95_max_command_chars": 81,
+  "worst_examples": [
+    {
+      "line_number": 165,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "multiline_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 180,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced the expected output. The output file is at /app/user_summary.json with correct structure, sorted by date then user...\",\"plan\":\"Run a quick validation using Python to ensure the output matches the required schema and that all dates are present. Then we can consider the task complete.\",\"commands\":[{\"keystrokes\":\"python3 -c \\\"\\nimport json\\nwith open('/app/user_summary.json') as f:\\n    data = json.load(f)\\nprint('Number of users:', len(data))\\n"
+    },
+    {
+      "line_number": 122,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 148,
+      "generated_preview": "{\"analysis\":\"All checks passed. The outputs are correct. However, we should ensure that the CSV file does not have extra spaces in column names and that the ordering is...\",\"plan\":\"1. Check the exact column order of the CSV using Python's csv module. 2. Verify that the JSON file is properly formatted with indentation. 3. If everything is...\",\"commands\":[{\"keystrokes\":\"python3 -c \\\"import csv; with open('/app/output/processed_readings.csv') as f: reader = csv.DictReader(f); cols = [field for fiel"
+    },
+    {
+      "line_number": 581,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 145,
+      "generated_preview": "{\"analysis\":\"The updated script produced a valid JSON file that matches the required structure. The validation notes are correct. The warning details are sorted by start...\",\"plan\":\"Run a quick test to ensure the JSON is parseable and that the summary numbers match the data. Then we can consider the task complete.\",\"commands\":[{\"keystrokes\":\"python3 -c \\\"import json; data=json.load(open('/app/output/event_report.json')); print('JSON loaded successfully'); print('Summary:', data['sum...\",\"duratio"
+    },
+    {
+      "line_number": 747,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 141,
+      "generated_preview": "{\"analysis\":\"The verification script shows that our reconciliation matches the expected counts. The errors log now includes all four error types. The anomaly CSV has 9 rows, which matches the expected count of anomalies. The report JSON looks correct. We...\",\"plan\":\"1. View the anomaly CSV to ensure it's sorted by transaction_id ascending.\\n2. Check that the CSV does not have any extra columns.\\n3. Optionally, run a quick validation using Python to ensure each row has the required fields and no."
+    },
+    {
+      "line_number": 292,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 139,
+      "generated_preview": "{\"analysis\":\"The output files exist but we need to verify correctness. The warning events file is missing (should be at /app/output/warning_events.json). Also location sum...\",\"plan\":\"1. Check if warning_events.json exists; if not, create it with appropriate content.\\n2. Verify that all cleaned readings have value >= 0 and status normal/war...\",\"commands\":[{\"keystrokes\":\"ls -la /app/output/\\n\",\"duration\":0.1},{\"keystrokes\":\"python3 -c \\\"import json; data = [json.loads(line) for line in open('/ap"
+    },
+    {
+      "line_number": 691,
+      "labels": [
+        "low_command_overlap",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 117,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The counts match expectations: 27 valid recordings, 2 missing required fields, 1 invalid duration, 1 inva...\",\"plan\":\"1. Validate JSON structure and content.\\n2. Validate CSV format and sorting.\\n3. Ensure all required files exist and are correct.\\n4. If any issues, adjust script...\",\"commands\":[{\"keystrokes\":\"ls -la /app/*.json /app/*.csv\\n\",\"duration\":0.1},{\"keystrokes\":\"python3 -c \\\"import json; data=json.load(open('/app/output/lo"
+    },
+    {
+      "line_number": 751,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 104,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. Need to verify that the outputs are correct according to the requirements. Let's examine the generated files...\",\"plan\":\"1. Check the content of session_details.json and regional_summary.json.\\n2. Validate JSON syntax with python -m json.tool.\\n3. Verify counts match expectations....\",\"commands\":[{\"keystrokes\":\"cat /app/session_details.json\\n\",\"duration\":0.1},{\"keystrokes\":\"python3 -m json.tool /app/session_details.json > /dev/null &"
+    },
+    {
+      "line_number": 404,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 104,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The CSV looks correct: columns in order, no extra columns, proper formatting. The JSON is valid and contains...\",\"plan\":\"1. Validate JSON with python's json.tool to ensure it's well-formed.\\n2. Check that the CSV does not have any extra spaces or quoting issues (should be fine).\\n3....\",\"commands\":[{\"keystrokes\":\"python3 -m json.tool output/reconciliation.json > /dev/null && echo 'reconciliation.json is valid JSON'\\n\",\"duration\":0.1}"
+    },
+    {
+      "line_number": 774,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 88,
+      "generated_preview": "{\"analysis\":\"The hourly report JSON looks correct. The CSV file does not exist (no output). We need to create it. Also we should verify that the CSV columns are in the...\",\"plan\":\"1. Create hourly_report.csv with proper headers and data.\\n2. Check the CSV content.\\n3. Validate JSON with python -m json.tool.\\n4. Ensure no extra whitespace o...\",\"commands\":[{\"keystrokes\":\"python3 -m json.tool /app/output/hourly_report.json > /dev/null && echo 'JSON is valid'\\n\",\"duration\":0.1},{\"keystrokes\":\"cat /"
+    },
+    {
+      "line_number": 305,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 87,
+      "generated_preview": "{\"analysis\":\"We have generated the required files. The counts match: total logs processed = 20 (including header? Actually wc -l gave 20 lines, but that includes header...\",\"plan\":\"1. Check if jq is installed; if yes, use it to validate JSON syntax. 2. Write a small Python script to verify the CSV calculations. 3. If any issues, fix...\",\"commands\":[{\"keystrokes\":\"which jq\\n\",\"duration\":0.1},{\"keystrokes\":\"jq . /app/tenant_reports/summary.json > /dev/null && echo 'summary.json is valid JSON'\\n\",\""
+    }
+  ]
+}
