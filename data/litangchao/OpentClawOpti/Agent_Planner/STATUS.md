@@ -158,6 +158,171 @@ reward_sum: 239.5
 output_size: 25M
 ```
 
+## OpenClaw Architecture Trajectory Export
+
+Planner runtime has been extended with explicit architecture events:
+
+```text
+task_queue_created
+strategist_model_selection
+architect_context
+executor_started
+verifier_result
+planner_queue_closed
+```
+
+These events map the current architecture into trainable signals:
+
+```text
+Planner -> Task Queue -> Strategist -> Architect -> Executor -> Verifier
+```
+
+Exporter script:
+
+```text
+data/litangchao/OpentClawOpti/Agent_Planner/scripts/build_openclaw_architecture_trajectories.py
+```
+
+Smoke benchmark generated with:
+
+```bash
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python backend/openclaw/benchmark.py \
+  --strategies audit_reflexion \
+  --repeats 1 \
+  --split holdout \
+  --output-dir data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260630T_architecture_smoke
+```
+
+Smoke result:
+
+```text
+tasks: 27 holdout
+success_rate: 100.00%
+mean_score: 1.0000
+mean_latency_seconds: 0.3779
+mean_architecture_event_count: 32.7037
+mean_subtask_count: 5.0000
+mean_verifier_result_count: 5.0000
+invalid_tool_call_count: 0
+hallucinated_action_count: 0
+unsafe_auto_allow_count: 0
+```
+
+Architecture-only export generated with:
+
+```bash
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/build_openclaw_architecture_trajectories.py \
+  --input-root data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260630T_architecture_smoke \
+  --no-legacy \
+  --output-transitions data/litangchao/OpentClawOpti/Agent_Planner/rewards/openclaw_architecture_smoke_transitions.jsonl \
+  --output-sft data/litangchao/OpentClawOpti/Agent_Planner/processed/openclaw_architecture_smoke_sft.jsonl
+```
+
+Result:
+
+```text
+runs_scanned: 27
+runs_exported: 27
+transitions: 135
+sft_rows: 135
+mean_reward: 0.946519
+model_tiers: large=3, medium=69, small=63
+next_actions: await_human=7, next_subtask=127, replan=1
+```
+
+Full OpenClaw audit export generated with:
+
+```bash
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/build_openclaw_architecture_trajectories.py \
+  --input-root data/benchmarks \
+  --input-root data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260630T_architecture_smoke \
+  --input-root data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260630T_architecture_full_r1 \
+  --output-transitions data/litangchao/OpentClawOpti/Agent_Planner/rewards/openclaw_architecture_transitions.jsonl \
+  --output-sft data/litangchao/OpentClawOpti/Agent_Planner/processed/openclaw_architecture_sft.jsonl
+```
+
+Result:
+
+```text
+runs_scanned: 4337
+runs_exported: 4337
+transitions: 21470
+sft_rows: 21470
+mean_reward: 0.947366
+model_tiers: large=212, medium=4293, small=16965
+next_actions: await_human=936, next_subtask=19953, replan=581
+planner_strategies: audit_astar=7365, audit_reflexion=6965, greedy_topk=7140
+source_modes: architecture=995, legacy=20475
+```
+
+Additional native architecture benchmark generated with:
+
+```bash
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python backend/openclaw/benchmark.py \
+  --strategies audit_astar,audit_reflexion \
+  --repeats 1 \
+  --split all \
+  --output-dir data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260630T_architecture_full_r1
+```
+
+Result:
+
+```text
+tasks: 88
+audit_astar success_rate: 100.00%
+audit_astar mean_architecture_event_count: 31.1818
+audit_reflexion success_rate: 100.00%
+audit_reflexion mean_architecture_event_count: 32.5455
+invalid_tool_call_count: 0
+hallucinated_action_count: 0
+unsafe_auto_allow_count: 0
+```
+
+Balanced architecture data generated with:
+
+```bash
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python \
+  data/litangchao/OpentClawOpti/Agent_Planner/scripts/balance_openclaw_architecture_data.py \
+  --transitions data/litangchao/OpentClawOpti/Agent_Planner/rewards/openclaw_architecture_transitions.jsonl \
+  --sft data/litangchao/OpentClawOpti/Agent_Planner/processed/openclaw_architecture_sft.jsonl \
+  --train-output data/litangchao/OpentClawOpti/Agent_Planner/processed/openclaw_architecture_balanced_train.jsonl \
+  --heldout-output data/litangchao/OpentClawOpti/Agent_Planner/processed/openclaw_architecture_balanced_holdout.jsonl \
+  --pair-output data/litangchao/OpentClawOpti/Agent_Planner/rewards/openclaw_architecture_counterfactual_pairs.jsonl \
+  --target-per-stratum 800 \
+  --max-per-stratum 1200 \
+  --max-duplicates-per-row 5 \
+  --heldout-ratio 0.1 \
+  --pair-limit 12000 \
+  --seed 17
+```
+
+Result:
+
+```text
+joined_rows: 21470
+train_source_rows: 19318
+heldout_rows: 2152
+balanced_train_rows: 7102
+preference_pairs: 12000
+architecture native source rows before balance:
+  large/await_human=10, large/replan=3, medium/await_human=41,
+  medium/next_subtask=414, medium/replan=26, small/next_subtask=406
+architecture native rows after balance:
+  large/await_human=60, large/replan=18, medium/await_human=246,
+  medium/next_subtask=800, medium/replan=156, small/next_subtask=800
+pair_reasons:
+  context_missing=5261
+  medium_to_small=2469
+  small_to_large=2630
+  await_human_to_next=853
+  next_to_replan=262
+  replan_to_next=525
+```
+
+The SFT export is intentionally separate from the Stage7 command/action JSON training set. Use it for a dedicated architecture-policy adapter or reward/preference filtering first; do not mix it into the high-accuracy command planner without an ablation.
+
 ## Environment Notes
 
 Created conda environment:
@@ -751,3 +916,175 @@ python data/litangchao/OpentClawOpti/Agent_Planner/scripts/normalize_tau_traject
 5. Attach automatic verifier rewards.
 6. Continue from the stage6 adapter with more compact short-command data and schema-first validation.
 7. For speed and reliability, keep the merged model on Transformers batch32 sorted prompts with SDPA, direct CUDA placement, a 256-token first pass, and selective hard retry for schema-invalid outputs. Use global medium compact policy plus hard retry as the quality-priority profile, and batch16 sorted as the lower-memory fallback. Treat vLLM/SGLang as separate validate-and-fallback or serving-stack fine-tuning projects before using either as a direct replacement.
+
+## 2026-06-30 Stage12 Architecture-Policy Compact Planner
+
+Goal: adapt the model planner to the current OpenClaw architecture diagram:
+Strategist chooses model tier, Architect chooses context policy, executor kind
+routes the subtask, and verifier decides the next action.
+
+Key scripts/tests:
+
+```text
+scripts/build_compact_architecture_policy_sft.py
+scripts/evaluate_architecture_policy.py
+scripts/summarize_architecture_policy_runs.py
+scripts/validate_openclaw_architecture_data.py
+tests/test_openclaw_architecture_compact_sft.py
+tests/test_openclaw_architecture_policy_eval.py
+tests/test_openclaw_architecture_summary.py
+tests/test_openclaw_architecture_validator.py
+```
+
+Data:
+
+```text
+processed/openclaw_architecture_native_balanced_train.jsonl      2320 rows
+processed/openclaw_architecture_native_balanced_holdout.jsonl      95 rows
+processed/openclaw_architecture_native_compact_train.jsonl       2320 rows
+processed/openclaw_architecture_native_compact_holdout.jsonl       95 rows
+rewards/openclaw_architecture_native_counterfactual_pairs.jsonl   900 rows
+```
+
+Native data validation:
+
+```text
+eval_runs/20260630T_architecture_native_data_validation/summary.json
+ok=true
+issue_count=0
+balanced_train=2320
+heldout=95
+pairs=900
+balanced_train_heldout_overlap=0
+```
+
+Negative/learning results:
+
+```text
+models/20260630T-architecture-policy-balanced-smoke-20
+  all-data target lowered loss, but mixed legacy/native data and full command JSON target kept the model in command-planner mode.
+
+models/20260630T-architecture-policy-native-smoke-40
+  native-only full target did not fix the format problem.
+  architecture eval: schema_valid=14.06%, model_tier=1.56%, next_action=7.81%, context_policy=1.56%, executor_kind=0.00%.
+```
+
+Promoted Stage12 candidate:
+
+```text
+models/20260630T-architecture-policy-compact-continue200/final_adapter
+eval_runs/20260630T_architecture_policy_compact_continue200_eval95
+eval_runs/20260630T_architecture_policy_compact_continue200_eval95/architecture_policy_eval_v4_alias
+```
+
+Metrics on 95-row native compact heldout:
+
+```text
+valid_json_rate=100.00%
+architecture_schema_valid_rate=100.00%
+model_tier_accuracy=97.89%
+next_action_accuracy=94.74%
+context_policy_accuracy=100.00%
+executor_kind_accuracy=100.00%
+loss=0.004614
+perplexity=1.0046
+mean_generation_seconds=2.468761
+mean_new_tokens=62.4421
+gpu_peak_memory_mb=7233.12
+```
+
+Iteration comparison:
+
+```text
+eval_runs/20260630T_architecture_policy_key_iterations_summary.md
+```
+
+Interpretation:
+
+```text
+Compact architecture targets are the first successful route for adapting the
+model planner to the proposed Strategist/Architect/Executor/Verifier architecture.
+The model now reliably emits compact policy JSON, and alias canonicalization maps
+tool-shaped executor outputs back to the architecture enum.
+
+This is still not a runtime replacement for backend/openclaw/planner.py:
+the heldout is only 95 native architecture rows, not the 1k command-planner benchmark.
+It should be treated as a candidate architecture-policy subplanner. Before runtime
+integration, expand native architecture heldout to at least 1k rows, add a constrained
+enum decoder or postprocessor for next_action, and run task-level benchmark against
+the profile-aware LocalAuditPlanner.
+```
+
+Recommended next step:
+
+```text
+Build a lightweight serving wrapper around compact outputs:
+1. parse compact JSON,
+2. canonicalize model_tier/context_policy/executor_kind/next_action aliases,
+3. apply deterministic tool priors for model_tier/executor_kind,
+4. add a next_action guard for rare replan/await_human decisions,
+5. evaluate on an expanded native architecture heldout and then task-level benchmark.
+```
+
+## 2026-06-30 Stage12 Serving Wrapper Follow-up
+
+Implemented the lightweight wrapper recommended above:
+
+```text
+scripts/apply_architecture_policy_wrapper.py
+tests/test_openclaw_architecture_policy_wrapper.py
+```
+
+Wrapper behavior:
+
+```text
+1. parse compact model JSON,
+2. normalize field aliases through evaluate_architecture_policy.py,
+3. apply tool priors for model_tier and executor_kind,
+4. apply permission-mode next_action guards for variable execution tools,
+5. optionally read eval_samples.jsonl so offline evaluation uses full prompts rather than truncated task_preview strings.
+```
+
+Best wrapper evaluation:
+
+```text
+input:
+  eval_runs/20260630T_architecture_policy_compact_continue200_eval95/generations.jsonl
+eval_samples:
+  eval_runs/20260630T_architecture_policy_compact_continue200_eval95/eval_samples.jsonl
+wrapped output:
+  eval_runs/20260630T_architecture_policy_compact_continue200_eval95/wrapped_generations_v3_samples.jsonl
+metrics:
+  eval_runs/20260630T_architecture_policy_compact_continue200_eval95/architecture_policy_eval_v6_wrapped_samples/metrics.json
+```
+
+Wrapper rule counts:
+
+```text
+permission_guard:next_action:ACCEPT_EDITS = 3
+permission_guard:next_action:DONT_ASK = 1
+permission_guard:next_action:EXPLORE = 1
+tool_prior:model_tier = 2
+```
+
+95-row native architecture heldout after wrapper:
+
+```text
+valid_json_rate=100.00%
+architecture_schema_valid_rate=100.00%
+model_tier_accuracy=100.00%
+next_action_accuracy=100.00%
+context_policy_accuracy=100.00%
+executor_kind_accuracy=100.00%
+```
+
+Important caveat:
+
+```text
+This is still an architecture-policy offline heldout result. Do not wire it into
+backend/openclaw/planner.py as a runtime replacement until it passes a larger
+native architecture heldout, then the task-level OpenClaw benchmark. The next
+useful implementation step is to package the wrapper as a small importable policy
+module and run it inside a task-level benchmark adapter without replacing
+LocalAuditPlanner.
+```
