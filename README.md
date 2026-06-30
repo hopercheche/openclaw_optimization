@@ -1,260 +1,148 @@
-# OpenClawPOpti
+# OpenClawPOpti Midterm Contribution Report
 
-OpenClawPOpti contains Capstone work for OpenClaw agent optimization. The repository currently has two implemented tracks:
+This README is written as my individual contribution draft for the group midterm report. It focuses on the part I am responsible for: the Planner direction in the OpenClaw agent optimization project. The language is intentionally report-ready so it can be merged into the final group submission.
 
-- Direction 1, The Strategist: a rule-based model router that routes requests to small / mid / large model tiers.
-- Direction 3, The Planner: an audit-first AgentScope 2 planner runtime with `greedy_topk`, `audit_astar`, and `audit_reflexion` planner strategies plus benchmark evidence.
+## 1. Output Goal
 
-It does not yet prove all three Capstone directions end to end. Direction 2, The Architect, is still only represented by context-boundary plumbing in the planner runtime.
+My goal is to build and validate an auditable planner layer for an AgentScope-style tool agent. The planner should improve multi-step task execution by choosing safer and more goal-aligned tool/action paths than a simple greedy baseline.
 
-## Current Fit Against The Capstone
+The expected output is not only a conceptual design. It should be a runnable prototype with API endpoints, event traces, permission decisions, benchmark tasks, evaluation reports, and enough evidence for the team to explain what has been implemented by the midterm checkpoint.
 
-| Capstone requirement | Current status | Evidence in this repo |
-| --- | --- | --- |
-| Baseline OpenClaw Agent | Partial | The deterministic fallback planner provides a stable baseline loop with fixed candidate generation, scoring, permission checks, and audit logs. |
-| Optimized OpenClaw Agent | Partial | The AS2-backed path embeds `Agent`, `OpenAIChatModel`, `Toolkit`, `AgentState`, `PermissionContext`, and `ReActConfig`; model-backed candidate generation is available when provider credentials are configured. |
-| Direction 1: model routing | Implemented | `src/router/rule_based.py`, `src/pipeline/inference.py`, `src/evaluation/metrics.py`, `demo.py`, and `tests/test_mvp.py`. |
-| Direction 2: progressive context | Partially implemented boundary | The planner runtime has workspace-scoped tools and audit-safe context boundaries, but no retrieval, memory block, or compaction benchmark yet. |
-| Direction 3: search planner | Partially implemented | `audit_astar` performs bounded A*-style search; `audit_reflexion` adds deterministic reflection repair inspired by LATS, Reflexion, Self-Refine, ToolChain*, ToT, and AFlow. Full MCTS rollout/backpropagation remains a later extension. |
-| Head-to-head proof | Partially implemented | Planner benchmark reports compare `greedy_topk`, `audit_astar`, and `audit_reflexion` on 88 tasks with dev/holdout splits, including converted PhoneHarness tasks plus a multi-source generalization suite from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench. The model-matrix runner can compare deterministic fallback with AS2/provider-backed runs, but real model evidence still requires provider keys at runtime. |
+The core research question for my part is:
 
-## Strategist Router
+> Can an explicit planner search layer improve an agent's tool selection, permission handling, and task success rate while keeping every decision auditable?
 
-The Strategist router routes user requests to a model tier before inference.
+## 2. Technical Architecture and Solution Plan
+
+The current Planner track is implemented as an audit-first runtime around AgentScope 2 concepts. The system keeps the public frontend/backend boundary simple, while isolating model-backed AgentScope execution behind an adapter layer.
 
 ```text
-user input -> rule-based router -> small/mid/large model tier -> provider -> output + metrics
-```
-
-Modules:
-
-| Module | Path | Purpose |
-| --- | --- | --- |
-| Model interface | `src/models/` | OpenAI-compatible provider and mock provider. |
-| Rule-based router | `src/router/rule_based.py` | Keyword, length, and complexity heuristics. |
-| Inference pipeline | `src/pipeline/inference.py` | Route, call provider, and return result. |
-| Evaluation metrics | `src/evaluation/metrics.py` | Cost, latency, and tier distribution. |
-| API service | `src/api/server.py` | FastAPI REST endpoints. |
-| CLI demo | `demo.py` | Offline demo and benchmark entrypoint. |
-
-Run the offline mock demo:
-
-```bash
-python3 demo.py demo
-python3 demo.py query "请解释为什么梯度下降能够收敛"
-python3 demo.py benchmark --file data/sample_queries.txt -o report.json
-```
-
-Start the router API:
-
-```bash
-python3 run_server.py
-```
-
-API endpoints:
-
-- `GET /health`
-- `POST /query`
-- `POST /route`
-- `POST /benchmark`
-
-The router thresholds and model tiers live in `config/models.yaml`.
-
-## Planner Runtime
-
-The Planner track is an auditable AgentScope 2 runtime with local permission gates and persisted run evidence.
-
-```text
-frontend static console
+Frontend static console
   -> OpenClaw REST/SSE API
   -> RunManager session
   -> LocalAuditPlanner control plane
-  -> AgentScope 2 runtime boundary
+  -> optional AgentScope 2 runtime boundary
   -> OpenClaw permission gate
-  -> events.jsonl/state.json/audit.md
+  -> persisted events.jsonl, state.json, and audit.md
 ```
 
-Planner strategies:
+The main backend modules are:
 
-- `greedy_topk`: baseline selector that ranks candidates independently by score.
-- `audit_astar`: optimized selector inspired by ToolChain*, Tree of Thoughts, and LATS. It searches candidate tool/action paths with explicit costs for risk, permission friction, repeated actions, and missing evidence, then records `search_*` events before execution.
-- `audit_reflexion`: reflective selector that starts from the A* path, then applies deterministic safety bookends, desired-tool coverage repair, explicit read-only cleanup, and `reflection_*` audit events.
+| Area | Files | Purpose |
+| --- | --- | --- |
+| API and run management | `backend/openclaw/server.py` | Exposes health, run creation, run lookup, event, stream, and audit endpoints. |
+| Planner control plane | `backend/openclaw/planner.py` | Generates candidate steps, selects a planner path, applies permissions, simulates safe tool execution, and writes final output. |
+| Search planner | `backend/openclaw/search_planner.py` | Implements `greedy_topk`, `audit_astar`, and `audit_reflexion`. |
+| Permission gate | `backend/openclaw/permissions.py` | Maps each action into `allow`, `ask`, or `deny` behavior under the current permission mode. |
+| Audit persistence | `backend/openclaw/storage.py`, `backend/openclaw/audit.py` | Stores run state, event logs, and Markdown audit reports. |
+| AgentScope integration | `backend/openclaw/as2_adapter.py`, `backend/openclaw/as2_runtime.py`, `backend/openclaw/as2_openai.py` | Detects AgentScope, builds the optional model-backed runtime, and falls back to deterministic candidates when credentials are unavailable. |
+| Benchmarking | `backend/openclaw/benchmark.py`, `backend/openclaw/model_matrix.py` | Evaluates planner strategies and provider/model configurations. |
+| Learned planner hint | `backend/openclaw/planner_profile_model.py`, `scripts/train_planner_profile_model.py` | Trains a lightweight Naive Bayes profile model for no-hint routing of workflow/tool profiles. |
 
-Enable `audit_reflexion` for backend runs:
+The baseline strategy is `greedy_topk`, which independently ranks candidate actions and chooses the highest-scoring steps. The optimized strategies are:
+
+- `audit_astar`: a bounded A*-style planner that searches over candidate tool/action paths. It scores paths using impact, evidence value, reversibility, risk, permission friction, repeated actions, and missing required tools.
+- `audit_reflexion`: a reflective variant that starts from the A* path and applies deterministic review/repair steps. It adds `reflection_*` events so the revision process is also visible in the audit trail.
+
+The architecture intentionally keeps OpenClaw in charge of permission checks and evidence logging. Even when a model-backed AgentScope runtime is available, the model proposes candidates, while OpenClaw enforces the execution boundary.
+
+## 3. Current Outputs and Progress
+
+By the midterm checkpoint, my part has the following working outputs:
+
+- A runnable backend planner service with REST and SSE endpoints.
+- A static frontend console under `frontend/` for creating runs, viewing live events, and reading audit reports.
+- A local permission engine that classifies actions as `allow`, `ask`, or `deny`.
+- Three planner strategies: `greedy_topk`, `audit_astar`, and `audit_reflexion`.
+- AgentScope 2 integration boundaries with deterministic fallback when provider credentials are not configured.
+- A benchmark harness with dev and holdout splits.
+- Converted and normalized planner task suites from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench.
+- A lightweight planner profile model trained from local multi-source fixtures.
+- Persisted benchmark reports, JSON metrics, and per-run audit artifacts.
+
+The latest deterministic benchmark uses 88 tasks, including 61 dev tasks and 27 holdout tasks, with 3 repeats per strategy. It compares the greedy baseline against the optimized planner strategies.
+
+| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `audit_astar` | 100.00% | 1.0000 | 0.2778s | 38.5909 | 0.0000 | 0 | 0 | 0 | 0 |
+| `audit_reflexion` | 100.00% | 1.0000 | 0.2902s | 32.0455 | 4.5000 | 0 | 0 | 0 | 0 |
+| `greedy_topk` | 5.68% | 0.7528 | 0.2846s | 0.0000 | 0.0000 | 0 | 0 | 0 | 0 |
+
+On the holdout split, both optimized strategies reached 100.00% success, while `greedy_topk` reached 11.11%. This suggests that explicit planning improves the benchmark outcomes without introducing safety regressions in the local deterministic setting.
+
+The planner profile model also provides initial no-hint generalization evidence. It was trained on 325 local examples from PhoneHarness, tau2, ToolBench, and SkillsBench. Its holdout accuracy is 100.00% for planner profile prediction, 95.06% for execution-tool prediction, and 64.20% for policy-mode prediction.
+
+## 4. Evidence of Current Outputs
+
+The current evidence is stored directly in the repository:
+
+| Evidence type | Location |
+| --- | --- |
+| Planner runtime code | `backend/openclaw/planner.py` |
+| Planner search algorithms | `backend/openclaw/search_planner.py` |
+| Permission gate | `backend/openclaw/permissions.py` |
+| AgentScope 2 adapter/runtime | `backend/openclaw/as2_adapter.py`, `backend/openclaw/as2_runtime.py` |
+| Benchmark runner | `backend/openclaw/benchmark.py` |
+| Benchmark task suites | `benchmarks/tasks/*.json` |
+| Latest benchmark report | `data/benchmarks/20260622T144217Z/report.md` |
+| Latest benchmark metrics | `data/benchmarks/20260622T144217Z/metrics.json` |
+| Per-run audit examples | `data/benchmarks/20260622T144217Z/artifacts/**/audit.md` |
+| Planner profile model | `data/planner_models/profile_policy_model.json` |
+| Planner profile model report | `data/planner_models/profile_policy_report.md` |
+| Architecture notes | `docs/AS2_ARCHITECTURE.md` |
+| Benchmark design notes | `docs/PLANNER_BENCHMARKS.md` |
+| MVP plan | `docs/MVP_PLAN.md` |
+
+Useful reproduction commands:
 
 ```bash
+python -m unittest discover -s tests
+python backend/openclaw/benchmark.py --repeats 3
+python backend/openclaw/benchmark.py --split holdout --repeats 3
 OPENCLAW_PLANNER_STRATEGY=audit_reflexion scripts/start_backend.sh
 ```
 
-Or pass it per run:
+No final UI screenshots are committed yet. Before the group report is submitted, I can capture screenshots of the frontend console, event timeline, and generated `audit.md` page as visual evidence.
 
-```json
-{"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT","planner_strategy":"audit_reflexion"}
-```
+## 5. Risks, Challenges, and Limitations
 
-## Planner Benchmarks
+The main limitation is that the strongest evidence currently comes from deterministic local benchmarks. The AgentScope 2 model-backed path exists, but real provider-quality comparisons still require stable API keys and repeated evaluation under the same benchmark protocol.
 
-Run the deterministic benchmark:
+The second limitation is that `audit_astar` is a bounded A*-style search, not a full LATS or MCTS planner. It is intentionally simpler and easier to audit, but it does not yet include full rollout simulation or backpropagation.
 
-```bash
-.venv/bin/python backend/openclaw/benchmark.py --repeats 3
-```
+The third risk is benchmark coverage. The current suite covers workspace grounding, permission traps, safety, deployment risk, mobile/CLI/MCP-style workflows, policy-tool-agent tasks, API planning tasks, and skill workflows. However, final evaluation should include more repo-grounded multi-step tasks that resemble realistic OpenClaw usage.
 
-Run the same protocol through detected AS2/model-backed candidate generation when provider credentials are configured:
+The fourth limitation is scope. My work focuses on the Planner direction. The broader capstone may also include Strategist and Architect directions, but those need to be integrated carefully so the final system does not become a collection of disconnected demos.
 
-```bash
-.venv/bin/python backend/openclaw/benchmark.py --runtime as2 --repeats 3
-```
+## 6. Plan and Goal for the Final Submission
 
-Run only the held-out split:
+For the final project, my plan is to strengthen the Planner contribution in four ways:
 
-```bash
-.venv/bin/python backend/openclaw/benchmark.py --split holdout --repeats 3
-```
+1. Run model-backed AS2/provider benchmarks with real credentials and compare them against the deterministic fallback.
+2. Expand benchmark tasks with more realistic OpenClaw workflows, especially repo-grounded editing, validation, and deployment-safety scenarios.
+3. Improve the reflective planner only if it beats or matches `audit_astar` under the same holdout protocol.
+4. Add final report evidence, including frontend screenshots, benchmark tables, generated audit reports, and a concise architecture diagram.
 
-Run the provider/model matrix without storing secrets:
+My target final deliverable is a planner module that the team can present as a measurable optimization layer: baseline vs optimized planner, clear architecture, reproducible benchmark protocol, and auditable run artifacts.
 
-```bash
-.venv/bin/python backend/openclaw/model_matrix.py --config benchmarks/model_matrix.example.json --split holdout --repeats 1
-```
+## 7. My Role and Contribution in the Team
 
-The matrix config stores only non-secret model metadata and names of required env vars. API keys are read from the process environment at runtime and are never written to reports.
+My team responsibility is the Planner direction. My contribution is to turn the planner idea into a working prototype and evidence package.
 
-Regenerate the converted PhoneHarness task suite:
+Specifically, I contributed:
 
-```bash
-.venv/bin/python scripts/convert_phoneharness_dataset.py --main-limit 18 --safety-limit 12
-```
+- Designed the audit-first planner architecture.
+- Implemented the backend planner runtime and API flow.
+- Implemented baseline and optimized planner strategies.
+- Integrated the AgentScope 2 runtime boundary.
+- Built the permission gate and audit logging path.
+- Built benchmark tasks, evaluation metrics, and report generation.
+- Converted external planner/workflow datasets into local OpenClaw benchmark fixtures.
+- Trained and evaluated the lightweight planner profile model.
+- Wrote technical documentation for architecture, benchmark design, and project progress.
 
-Build the multi-source planner generalization suite from the downloaded planner datasets:
+## 8. AI Usage Statement
 
-```bash
-.venv/bin/python scripts/build_planner_generalization_suite.py
-```
+I used AI coding assistants, including ChatGPT/Codex, to help with implementation planning, code drafting, debugging, documentation, and summarizing benchmark evidence. AI was used as an assistant for generating and refining code, organizing report language, and checking that the written explanation matched the repository artifacts.
 
-That suite normalizes PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench into shared planner features: `source_family`, `planner_profile`, `execution_tools`, and `policy_mode`.
-
-Train the lightweight planner profile model from the downloaded datasets:
-
-```bash
-.venv/bin/python scripts/train_planner_profile_model.py
-```
-
-The trained model is saved to `data/planner_models/profile_policy_model.json`; its report is `data/planner_models/profile_policy_report.md`. It learns planner profile, execution-tool set, and policy mode from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench, then acts as a conservative hint when a new task has no explicit `execution_tool(s)=...` metadata.
-
-Latest planner benchmark evidence:
-
-```text
-data/benchmarks/20260622T144217Z/report.md
-data/benchmarks/20260622T144217Z/metrics.json
-```
-
-The latest run used 88 tasks with 3 repeats and met the stop criteria: `audit_astar` and `audit_reflexion` both reached 100.00% success rate vs `greedy_topk` at 5.68%. The profile-aligned shortcut and learned profile model preserve audit events: `audit_astar` recorded 38.5909 mean search events, and `audit_reflexion` recorded 32.0455 mean search events plus 4.5000 mean reflection events, with 0 invalid tools, hallucinated actions, loop failures, or unsafe auto-allows. On holdout, both optimized strategies reached 100.00% success rate vs `greedy_topk` at 11.11%.
-
-No-hint generalization smoke:
-
-```text
-/tmp/openclaw_stripped_with_model/metrics.json
-```
-
-This smoke strips explicit profile metadata from the 34-task multi-source generalization suite. With the trained profile model enabled, `audit_astar` reached 97.06% overall success and 100.00% holdout success; with the model disabled, the same stripped suite reached 5.88% in the earlier control run.
-
-Latest model-matrix smoke evidence:
-
-```text
-data/model_matrix/20260622T031111Z/matrix_report.md
-data/model_matrix/20260622T031111Z/matrix_metrics.json
-```
-
-That smoke used the holdout split with no provider keys in the environment. It verifies matrix execution, required-env detection, and model skip/fallback accounting; it is not a real provider quality comparison.
-
-See `docs/PLANNER_BENCHMARKS.md` and `docs/CAPSTONE_PLANNER_RESEARCH.md` for benchmark design and research notes.
-
-## AS2 Model Provider
-
-DeepSeek OpenAI-compatible runtime:
-
-```bash
-DEEPSEEK_API_KEY=... scripts/start_backend.sh
-```
-
-For local development, `scripts/start_backend.sh` automatically loads `.env.local` when present. `.env.local` is ignored by git and should contain secrets only on the local machine.
-
-Optional model override:
-
-```bash
-OPENCLAW_DEEPSEEK_MODEL=deepseek-v4-pro DEEPSEEK_API_KEY=... scripts/start_backend.sh
-```
-
-Default DeepSeek settings:
-
-```text
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-OPENCLAW_DEEPSEEK_MODEL=deepseek-v4-flash
-OPENCLAW_MODEL_TIMEOUT_SECONDS=45
-```
-
-Generic OpenAI-compatible runtime:
-
-```bash
-OPENAI_API_KEY=... OPENAI_BASE_URL=... OPENCLAW_OPENAI_MODEL=... scripts/start_backend.sh
-```
-
-Do not commit API keys. The backend records only provider readiness, base URL, and model name in audit events.
-
-## Planner API
-
-- `GET /api/health`
-- `GET /api/as2/architecture`
-- `POST /api/runs`
-- `GET /api/runs`
-- `GET /api/runs/{run_id}`
-- `GET /api/runs/{run_id}/events`
-- `GET /api/runs/{run_id}/stream`
-- `GET /api/runs/{run_id}/audit.md`
-
-Example:
-
-```bash
-curl -s http://127.0.0.1:8787/api/runs \
-  -H 'Content-Type: application/json' \
-  -d '{"goal":"Plan an auditable workspace automation","permission_mode":"DEFAULT"}'
-```
-
-## Project Layout
-
-```text
-backend/openclaw/             # AS2 planner runtime and benchmark harness
-benchmarks/                   # Planner benchmark tasks and model matrix config
-config/models.yaml            # Strategist router model tiers and thresholds
-data/                         # Sample router queries and committed benchmark evidence
-docs/                         # AS2 architecture and planner benchmark notes
-frontend/                     # Static planner console
-scripts/                      # Planner backend/frontend launchers
-src/                          # Strategist router
-tests/                        # Planner and router tests
-demo.py                       # Strategist CLI demo
-run_server.py                 # Strategist API server
-```
-
-## Tests
-
-Planner / AS2 tests:
-
-```bash
-.venv/bin/python -m unittest discover -s tests
-```
-
-Strategist router test:
-
-```bash
-python3 -m pytest tests/test_mvp.py
-```
-
-## Roadmap
-
-1. Run the model matrix with real provider keys and compare model-backed candidate generation against deterministic fallback.
-2. Extend planner benchmark tasks with more repo-grounded and model-backed cases.
-3. Add true LATS/MCTS rollout and backpropagation only if it improves over `audit_reflexion` under the same holdout protocol.
-4. Add progressive context injection using memory blocks, retrieval, and compaction.
-5. Strengthen Strategist routing with feature-based, cost-aware, or cascade routing.
+I reviewed the generated code and documentation, selected the final technical direction, ran or inspected the benchmark evidence, and kept the final implementation grounded in the actual project files. No secret keys were provided to AI tools, and API credentials are expected to remain in local environment variables rather than committed files.
