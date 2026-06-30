@@ -54,6 +54,14 @@ class BenchmarkTest(unittest.TestCase):
                 result.summary["audit_reflexion"]["mean_reflection_event_count"],
                 0,
             )
+            self.assertGreater(
+                result.summary["audit_reflexion"]["mean_architecture_event_count"],
+                0,
+            )
+            self.assertGreater(
+                result.summary["audit_reflexion"]["mean_verifier_result_count"],
+                0,
+            )
             self.assertTrue((Path(temp_dir) / "metrics.json").exists())
             self.assertTrue((Path(temp_dir) / "report.md").exists())
 

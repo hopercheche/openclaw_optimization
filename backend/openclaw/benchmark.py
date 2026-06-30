@@ -27,6 +27,17 @@ from openclaw.storage import RunStorage
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TASKS_DIR = PROJECT_ROOT / "benchmarks" / "tasks"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "data" / "benchmarks"
+_ARCHITECTURE_EVENT_TYPES = {
+    "architecture_snapshot",
+    "task_queue_created",
+    "subtask_started",
+    "strategist_model_selection",
+    "architect_context",
+    "executor_started",
+    "verifier_result",
+    "subtask_finished",
+    "planner_queue_closed",
+}
 
 
 @dataclass(slots=True)
@@ -86,6 +97,9 @@ class BenchmarkTaskResult:
     reasoning_steps: int
     search_event_count: int
     reflection_event_count: int
+    architecture_event_count: int
+    subtask_count: int
+    verifier_result_count: int
     model_event_count: int
     model_started_count: int
     model_result_count: int
@@ -293,6 +307,9 @@ def _score_task(
     reasoning_steps = sum(1 for event in events if event.event_type == "reasoning")
     search_event_count = sum(1 for event in events if event.event_type.startswith("search_"))
     reflection_event_count = sum(1 for event in events if event.event_type.startswith("reflection_"))
+    architecture_event_count = sum(1 for event in events if event.event_type in _ARCHITECTURE_EVENT_TYPES)
+    subtask_count = sum(1 for event in events if event.event_type == "subtask_started")
+    verifier_result_count = sum(1 for event in events if event.event_type == "verifier_result")
     model_event_count = sum(1 for event in events if event.event_type.startswith("as2_model"))
     model_started_count = sum(1 for event in events if event.event_type == "as2_model_started")
     model_result_count = sum(1 for event in events if event.event_type == "as2_model_result")
@@ -341,6 +358,9 @@ def _score_task(
         "reasoning_steps": reasoning_steps,
         "search_event_count": search_event_count,
         "reflection_event_count": reflection_event_count,
+        "architecture_event_count": architecture_event_count,
+        "subtask_count": subtask_count,
+        "verifier_result_count": verifier_result_count,
         "model_event_count": model_event_count,
         "model_started_count": model_started_count,
         "model_result_count": model_result_count,
@@ -373,6 +393,9 @@ def _score_task(
         reasoning_steps=reasoning_steps,
         search_event_count=search_event_count,
         reflection_event_count=reflection_event_count,
+        architecture_event_count=architecture_event_count,
+        subtask_count=subtask_count,
+        verifier_result_count=verifier_result_count,
         model_event_count=model_event_count,
         model_started_count=model_started_count,
         model_result_count=model_result_count,
@@ -453,6 +476,15 @@ def _summarize(results: list[BenchmarkTaskResult]) -> dict[str, dict[str, float 
             "mean_reasoning_steps": round(statistics.mean(result.reasoning_steps for result in subset), 4),
             "mean_search_event_count": round(statistics.mean(result.search_event_count for result in subset), 4),
             "mean_reflection_event_count": round(statistics.mean(result.reflection_event_count for result in subset), 4),
+            "mean_architecture_event_count": round(
+                statistics.mean(result.architecture_event_count for result in subset),
+                4,
+            ),
+            "mean_subtask_count": round(statistics.mean(result.subtask_count for result in subset), 4),
+            "mean_verifier_result_count": round(
+                statistics.mean(result.verifier_result_count for result in subset),
+                4,
+            ),
             "mean_model_event_count": round(statistics.mean(result.model_event_count for result in subset), 4),
             "model_started_count": model_started_count,
             "model_result_count": model_result_count,
@@ -634,14 +666,17 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
         "",
         "## Summary",
         "",
-        "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Model starts | Model results | Model fallbacks | Model skips | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Architecture events | Subtasks | Verifier results | Model starts | Model results | Model fallbacks | Model skips | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in run_result.summary.items():
         lines.append(
             f"| `{strategy}` | {metrics['success_rate']:.2%} | {metrics['mean_score']:.4f} | "
             f"{metrics['mean_latency_seconds']:.4f}s | {metrics['mean_search_event_count']:.4f} | "
-            f"{metrics['mean_reflection_event_count']:.4f} | {metrics['model_started_count']} | "
+            f"{metrics['mean_reflection_event_count']:.4f} | "
+            f"{metrics['mean_architecture_event_count']:.4f} | "
+            f"{metrics['mean_subtask_count']:.4f} | {metrics['mean_verifier_result_count']:.4f} | "
+            f"{metrics['model_started_count']} | "
             f"{metrics['model_result_count']} | {metrics['model_fallback_count']} | "
             f"{metrics['model_skipped_count']} | "
             f"{metrics['invalid_tool_call_count']} | "
@@ -654,14 +689,17 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
         lines.extend([
             f"### {split}",
             "",
-            "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Strategy | Success rate | Mean score | Mean latency | Search events | Reflection events | Architecture events | Subtasks | Verifier results | Invalid tools | Hallucinated actions | Loop failures | Unsafe auto-allow |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ])
         for strategy, metrics in split_summary.items():
             lines.append(
                 f"| `{strategy}` | {metrics['success_rate']:.2%} | {metrics['mean_score']:.4f} | "
                 f"{metrics['mean_latency_seconds']:.4f}s | {metrics['mean_search_event_count']:.4f} | "
-                f"{metrics['mean_reflection_event_count']:.4f} | {metrics['invalid_tool_call_count']} | "
+                f"{metrics['mean_reflection_event_count']:.4f} | "
+                f"{metrics['mean_architecture_event_count']:.4f} | "
+                f"{metrics['mean_subtask_count']:.4f} | {metrics['mean_verifier_result_count']:.4f} | "
+                f"{metrics['invalid_tool_call_count']} | "
                 f"{metrics['hallucinated_action_count']} | {metrics['loop_failure_count']} | "
                 f"{metrics['unsafe_auto_allow_count']} |"
             )
@@ -686,6 +724,9 @@ def _render_report(run_result: BenchmarkRunResult) -> str:
             f"- Latency: {result.latency_seconds}s",
             f"- Search events: {result.search_event_count}",
             f"- Reflection events: {result.reflection_event_count}",
+            f"- Architecture events: {result.architecture_event_count}",
+            f"- Subtasks: {result.subtask_count}",
+            f"- Verifier results: {result.verifier_result_count}",
             f"- Model events: {result.model_event_count}",
             f"- Model started/result/fallback/skipped: {result.model_started_count}/{result.model_result_count}/{result.model_fallback_count}/{result.model_skipped_count}",
             f"- Selected tools: {result.selected_tools}",

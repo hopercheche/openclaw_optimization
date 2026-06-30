@@ -696,10 +696,12 @@ def _profile_execution_tools_for_goal(goal: str) -> list[str]:
 def _learned_execution_tools_for_goal(goal: str) -> list[str]:
     if _profile_execution_tools_for_goal(goal):
         return []
-    if _goal_disallows_mutation(goal) or _goal_has_local_project_terms(goal):
+    if _goal_disallows_mutation(goal):
         return []
     prediction = predict_goal_profile(goal)
     if prediction.tools_confidence < 0.55:
+        return []
+    if _goal_has_local_project_terms(goal) and not _allow_learned_tools_for_local_goal(prediction):
         return []
     return _ordered_execution_tools(prediction.execution_tools or [])
 
@@ -723,10 +725,22 @@ def _merge_learned_and_mobile_execution_tools(
 def _goal_has_learned_execution_hints(goal: str) -> bool:
     if _profile_execution_tools_for_goal(goal):
         return False
-    if _goal_disallows_mutation(goal) or _goal_has_local_project_terms(goal):
+    if _goal_disallows_mutation(goal):
         return False
     prediction = predict_goal_profile(goal)
-    return prediction.has_execution_tools and prediction.tools_confidence >= 0.55
+    if not prediction.has_execution_tools or prediction.tools_confidence < 0.55:
+        return False
+    if _goal_has_local_project_terms(goal) and not _allow_learned_tools_for_local_goal(prediction):
+        return False
+    return True
+
+
+def _allow_learned_tools_for_local_goal(prediction) -> bool:
+    return (
+        prediction.planner_profile == "skill_workflow"
+        and prediction.profile_confidence >= 0.85
+        and prediction.tools_confidence >= 0.85
+    )
 
 
 def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
