@@ -1088,3 +1088,607 @@ useful implementation step is to package the wrapper as a small importable polic
 module and run it inside a task-level benchmark adapter without replacing
 LocalAuditPlanner.
 ```
+
+## 2026-07-01 Stage13 Architecture-Policy Shadow Adapter
+
+Implemented the next step as a non-runtime-replacing shadow adapter:
+
+```text
+scripts/architecture_policy.py
+scripts/apply_architecture_policy_wrapper.py
+scripts/benchmark_architecture_policy_shadow.py
+tests/test_openclaw_architecture_policy_shadow.py
+```
+
+Serving wrapper improvements:
+
+```text
+1. moved wrapper logic into importable architecture_policy.py,
+2. added deterministic context_policy priors per OpenClaw tool role,
+3. added BYPASS handling for variable execution tools,
+4. preserved await_human for dangerous mutating actions even under edit-friendly modes,
+5. added a task-level shadow benchmark over LocalAuditPlanner architecture events.
+```
+
+Task-level shadow result:
+
+```text
+input: eval_runs/20260630T_architecture_full_r1
+output: eval_runs/20260701T_architecture_policy_shadow_full_r1
+event_files_seen: 176
+rows: 860
+exact_policy_match: 100.00%
+model_tier_accuracy: 100.00%
+verifier_next_action_accuracy: 100.00%
+context_policy_accuracy: 100.00%
+executor_kind_accuracy: 100.00%
+```
+
+Next-action ablation:
+
+```text
+output: eval_runs/20260701T_architecture_policy_shadow_full_r1_no_next_prior
+exact_policy_match: 30.93%
+verifier_next_action_accuracy: 30.93%
+model_tier/context_policy/executor_kind: 100.00%
+```
+
+Stage12 regression check after module extraction:
+
+```text
+output: eval_runs/20260701T_architecture_policy_compact_continue200_eval95_module_wrapped
+rows: 95
+schema_valid_rate: 100.00%
+model_tier_accuracy: 100.00%
+next_action_accuracy: 100.00%
+context_policy_accuracy: 100.00%
+executor_kind_accuracy: 100.00%
+```
+
+Interpretation:
+
+```text
+The architecture-policy wrapper is now a stable normalization/safety layer for
+compact model outputs and task-level event replay. This still does not prove the
+learned architecture-policy model can replace LocalAuditPlanner, because the
+860-row shadow result is rule/prior replay against current deterministic event
+labels. The next useful optimization is to run the learned model on a larger
+native architecture heldout and feed its outputs through the same shadow adapter.
+```
+
+## 2026-07-01 Stage14 Learned Architecture-Policy 1k Native Eval
+
+Goal:
+
+```text
+Move the architecture-policy route from the earlier 95-row native heldout to a
+larger runtime-shaped learned-model evaluation:
+1. build at least 1k native architecture rows,
+2. run the learned compact architecture-policy model,
+3. score raw outputs and serving-wrapper outputs under the same reference,
+4. keep the route separate from backend/openclaw/planner.py.
+```
+
+Native data:
+
+```text
+benchmark output: eval_runs/20260701T_architecture_full_r2
+strategies: audit_astar,audit_reflexion
+repeats: 2
+runs_exported: 352
+transition rows: 1720
+sft rows: 1720
+model_tiers: large=20, medium=944, small=756
+next_actions: await_human=100, next_subtask=1560, replan=60
+```
+
+Shadow rule/prior replay on the full 1720-row native event set:
+
+```text
+output: eval_runs/20260701T_architecture_policy_shadow_full_r2
+rows: 1720
+exact_policy_match: 100.00%
+model_tier_accuracy: 100.00%
+verifier_next_action_accuracy: 100.00%
+context_policy_accuracy: 100.00%
+executor_kind_accuracy: 100.00%
+```
+
+Learned model generation:
+
+```text
+model: models/20260630T-architecture-policy-compact-continue200/final_adapter
+base: models/20260627T-stage7-verifier-combined3k-500-merged
+eval rows: 1000
+output: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k
+batch_size: 32
+max_new_tokens: 96
+GPU: CUDA_VISIBLE_DEVICES=1
+total_generation_seconds: 149.062657
+mean_amortized_generation_seconds: 0.149063
+tokens_per_second: 455.862
+gpu_peak_memory_mb: 10351.96
+```
+
+Raw learned-model result:
+
+```text
+eval: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k/raw_eval
+schema_valid_rate: 99.90%
+model_tier_accuracy: 97.60%
+next_action_accuracy: 93.10%
+context_policy_accuracy: 98.90%
+executor_kind_accuracy: 98.00%
+parse_failures: 1
+```
+
+Best serving-wrapper result:
+
+```text
+wrapped output: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k/wrapped_generations_v4_promptctx_deployonly.jsonl
+eval: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k/wrapped_eval_v4_promptctx_deployonly
+schema_valid_rate: 100.00%
+model_tier_accuracy: 100.00%
+next_action_accuracy: 100.00%
+context_policy_accuracy: 100.00%
+executor_kind_accuracy: 100.00%
+```
+
+Wrapper rule counts for the 1k best run:
+
+```text
+permission_guard:next_action:ACCEPT_EDITS = 49
+permission_guard:next_action:BYPASS = 1
+permission_guard:next_action:DEFAULT = 14
+permission_guard:next_action:DONT_ASK = 2
+permission_guard:next_action:EXPLORE = 1
+tool_prior:context_policy = 11
+tool_prior:executor_kind = 20
+tool_prior:model_tier = 24
+tool_prior:next_action = 2
+```
+
+Negative result:
+
+```text
+wrapped_eval_v3_promptctx_safe reached schema/model/context/executor 100.00%
+but next_action dropped to 94.40% because the wrapper treated full prompt text
+as the mutating action for all variable execution tools. That made global words
+such as production/credential in the goal force too many await_human predictions.
+The fix is deploy-only prompt-context fallback: use prompt text as action only
+when the model omitted action and the inferred tool is deploy_runner.
+```
+
+Interpretation:
+
+```text
+Stage14 satisfies the larger architecture-policy target: learned model + serving
+wrapper reaches 100.00% schema and 100.00% accuracy on all four policy fields
+over a 1k native architecture eval slice. This is still an architecture-policy
+subplanner/serving-normalization route. It is not a replacement for
+LocalAuditPlanner unless the user explicitly asks for runtime integration and a
+task-level benchmark validates that integration.
+```
+
+## 2026-07-01 Stage15 Runtime-Shadow + Enum-Classifier + Hard-Negative Eval
+
+Goal:
+
+```text
+Continue along the five architecture-aligned directions:
+1. runtime shadow readiness,
+2. low-latency classifier / enum-head path,
+3. hard-negative eval,
+4. reduced wrapper-rule dependence with measured corrections,
+5. Strategist/Architect-compatible policy outputs.
+```
+
+New implementation:
+
+```text
+scripts/benchmark_architecture_policy_runtime_shadow.py
+scripts/benchmark_architecture_policy_classifier.py
+scripts/build_architecture_policy_perturbations.py
+scripts/architecture_policy.py active-action context extraction
+tests/test_openclaw_architecture_policy_shadow.py
+tests/test_openclaw_architecture_policy_perturbations.py
+```
+
+Low-latency enum classifier, clean 1k:
+
+```text
+output: eval_runs/20260701T_stage15_enum_classifier_1k_activeaction
+input: processed/openclaw_architecture_stage14_r2_compact_eval.jsonl
+rows: 1000
+exact_match_rate: 100.00%
+model_tier/verifier_next_action/context_policy/executor_kind: 100.00%
+mean_prediction_seconds: 0.00005823
+```
+
+Compared with learned generation:
+
+```text
+Stage14 generation mean_amortized_generation_seconds: 0.149063
+Stage15 enum classifier mean_prediction_seconds: 0.00005823
+relative speedup on this architecture-policy label task: about 2560x
+```
+
+Hard-negative perturbation suite:
+
+```text
+processed/stage15_architecture_policy_perturbations_1k.jsonl
+rows_written: 3608
+types:
+  dangerous_action_guard = 304
+  expected_next_action_distractor = 1000
+  permission_mode_rewrite = 304
+  tool_action_distractor = 1000
+  tool_name_confusion = 1000
+target eval: eval_runs/20260701T_stage15_perturbation_target_eval
+target schema/model/next/context/executor: 100.00%
+```
+
+Classifier on hard negatives:
+
+```text
+before active-action fix:
+  output: eval_runs/20260701T_stage15_enum_classifier_perturbations_3608
+  exact_match_rate: 92.02%
+  failure mode: focused-action context ignored "Perturbation active action" hazard text
+
+after active-action fix:
+  output: eval_runs/20260701T_stage15_enum_classifier_perturbations_3608_activeaction
+  rows: 3608
+  exact_match_rate: 100.00%
+  model_tier/verifier_next_action/context_policy/executor_kind: 100.00%
+  mean_prediction_seconds: 0.00006395
+```
+
+Serving wrapper v6:
+
+```text
+wrapped output: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k/wrapped_generations_v6_activeaction.jsonl
+eval: eval_runs/20260701T_architecture_policy_model_stage14_r2_1k/wrapped_eval_v6_activeaction
+rows: 1000
+schema_valid_rate: 100.00%
+model_tier_accuracy: 100.00%
+next_action_accuracy: 100.00%
+context_policy_accuracy: 100.00%
+executor_kind_accuracy: 100.00%
+```
+
+Runtime shadow matrix, learned raw vs wrapped:
+
+```text
+output: eval_runs/20260701T_stage15_runtime_shadow_1k_activeaction
+raw rows: 1000
+raw schema_valid_rate: 99.90%
+raw model/next/context/executor: 97.60% / 93.10% / 98.90% / 98.00%
+wrapped schema_valid_rate: 100.00%
+wrapped model/next/context/executor: 100.00% / 100.00% / 100.00% / 100.00%
+repair_counts:
+  model_tier repaired = 24
+  next_action repaired = 69
+  context_policy repaired = 11
+  executor_kind repaired = 20
+```
+
+Important design decision:
+
+```text
+Do not return to a broad full-prompt dangerous-action guard. Stage14 v3 already
+proved that approach over-fires on global goal text. Stage15 uses a narrower
+active-action extraction rule:
+
+  Perturbation active action:
+  Active action:
+  Selected action risk:
+
+Only those explicitly active action/risk lines join the focused title/objective
+context. Rejected hard-negative distractors such as "ignore the rejected
+alternative action `deploy_runner: run rm -rf ...`" remain ignored.
+```
+
+Tests:
+
+```text
+/home/litangchao/miniconda3/envs/AgentOpti/bin/python -m unittest discover -s tests -p 'test_openclaw_architecture_policy*.py'
+Ran 17 tests: OK
+```
+
+Interpretation:
+
+```text
+For the architecture-policy subtask, the zero-generation enum classifier is now
+the best serving candidate: it matches the 1k clean heldout and 3608-row
+hard-negative suite at 100.00% while running in tens of microseconds per row.
+The learned generation model remains useful as a distillation target and raw
+model signal for shadow diagnostics, but the enum classifier is the safer
+application-facing path for runtime shadow logging. This still does not replace
+LocalAuditPlanner or the Stage7 command/action planner.
+```
+
+## 2026-07-01 Stage16 Shadow Matrix, Tool Hazard, Layer Metrics, Rule Distillation, Stage17 Adapter Pack
+
+Additional implementation:
+
+```text
+scripts/benchmark_runtime_shadow_matrix.py
+scripts/build_architecture_rule_distillation_sft.py
+scripts/build_architecture_adapter_sft.py
+scripts/benchmark_architecture_policy_ablation.py
+STAGE16_RESULTS_TABLE_CN.md
+STAGE17_PRIOR_ABLATION_CN.md
+STAGE17_TOOLMAZE_HARD_NEGATIVE_CN.md
+STAGE18_NEXT_EXPERIMENTS_CN.md
+benchmark_architecture_policy_classifier.py layer metrics:
+  strategist = model_tier + verifier_next_action
+  architect = context_policy + executor_kind
+```
+
+Runtime shadow matrix:
+
+```text
+output: eval_runs/20260701T_stage16_runtime_shadow_matrix_1k
+rows: 1000
+raw exact_match_rate: 89.00%
+wrapped exact_match_rate: 100.00%
+classifier exact_match_rate: 100.00%
+classifier_no_next_prior exact_match_rate: 30.40%
+```
+
+Interpretation:
+
+```text
+The no-next-prior counterfactual is intentionally bad: exact falls to 30.40%.
+This confirms next_action priors / permission guard are still required. The
+right route is to distill raw mistakes first, not delete the guard.
+```
+
+ToolBench-X style active tool-hazard perturbation:
+
+```text
+processed/stage16_architecture_policy_toolhazard_perturbations_1k.jsonl
+rows_written: 3912
+new type: tool_unreliability_replan = 304
+hazards: Specification Drift, Invocation Error, Execution Failure, Output Drift, Cross-source Conflict
+target eval: eval_runs/20260701T_stage16_toolhazard_perturbation_target_eval
+target schema/model/next/context/executor: 100.00%
+```
+
+Classifier result with Strategist/Architect layers:
+
+```text
+clean output: eval_runs/20260701T_stage16_enum_classifier_clean1k_layers
+clean rows: 1000
+clean exact/model/next/context/executor: 100.00%
+clean strategist_exact_rate: 100.00%
+clean architect_exact_rate: 100.00%
+clean mean_prediction_seconds: 0.00006163
+
+toolhazard output: eval_runs/20260701T_stage16_enum_classifier_toolhazard_3912_layers
+toolhazard rows: 3912
+toolhazard exact/model/next/context/executor: 100.00%
+toolhazard strategist_exact_rate: 100.00%
+toolhazard architect_exact_rate: 100.00%
+toolhazard mean_prediction_seconds: 0.00006568
+
+unsolvable/toolhazard output: eval_runs/20260701T_stage16_enum_classifier_unsolvable_toolhazard_4912_layers
+unsolvable/toolhazard rows: 4912
+unsolvable/toolhazard exact/model/next/context/executor: 100.00%
+unsolvable/toolhazard strategist_exact_rate: 100.00%
+unsolvable/toolhazard architect_exact_rate: 100.00%
+unsolvable/toolhazard mean_prediction_seconds: 0.00006844
+```
+
+Important priority fix:
+
+```text
+Active recoverable tool hazard now triggers replan before passive deployment
+risk terms trigger await_human. This fixes deploy_runner tool_unreliability
+samples where the focused title contains "production deployment" but the active
+context is a recoverable tool failure, not a destructive operation.
+```
+
+Rule-distillation data:
+
+```text
+output: processed/stage16_architecture_rule_distill_classifier_1k.jsonl
+summary: processed/stage16_architecture_rule_distill_classifier_1k.summary.json
+target eval: eval_runs/20260701T_stage16_rule_distill_classifier_110_target_eval_v2
+rows_written: 110
+target schema/model/next/context/executor: 100.00%
+raw_mismatch_fields:
+  verifier_next_action = 69
+  model_tier = 24
+  executor_kind = 20
+  context_policy = 11
+```
+
+Stage17 adapter SFT pack:
+
+```text
+builder: scripts/build_architecture_adapter_sft.py
+output: processed/stage17_architecture_policy_adapter_sft_1k.jsonl
+summary: processed/stage17_architecture_policy_adapter_sft_1k.jsonl.summary.json
+target eval: eval_runs/20260701T_stage17_architecture_adapter_sft_1k_target_eval
+classifier eval: eval_runs/20260701T_stage17_enum_classifier_adapter_1k_layers
+rows_written: 1000
+source_mix:
+  rule_distillation = 110
+  perturbation = 890
+next_action:
+  await_human = 365
+  next_subtask = 386
+  replan = 249
+expected_changed:
+  true = 536
+  false = 464
+target schema/model/next/context/executor: 100.00%
+classifier exact/model/next/context/executor: 100.00%
+classifier strategist/architect: 100.00%
+classifier mean_prediction_seconds: 0.00007283
+```
+
+Stage17 ToolMaze implicit semantic failure:
+
+```text
+doc: STAGE17_TOOLMAZE_HARD_NEGATIVE_CN.md
+new perturbation: implicit_semantic_tool_failure
+hard-negative output: processed/stage17_architecture_policy_toolmaze_perturbations_1k.jsonl
+hard-negative rows: 5216
+implicit_semantic_tool_failure rows: 304
+expected_next_action:
+  await_human = 1582
+  next_subtask = 2646
+  replan = 988
+target eval: eval_runs/20260701T_stage17_toolmaze_perturbation_target_eval
+classifier eval: eval_runs/20260701T_stage17_enum_classifier_toolmaze_5216_layers
+classifier exact/strategist/architect: 100.00%
+classifier mean_prediction_seconds: 0.00007044
+ablation: eval_runs/20260701T_stage17_architecture_policy_ablation_toolmaze_5216
+ablation exact:
+  full = 100.00%
+  no_next_action_prior = 59.97%
+  no_tool_priors = 0.00%
+  no_permission_guards = 77.53%
+  no_hazard_guards = 64.57%
+  tool_priors_only = 40.03%
+```
+
+Stage17 adapter SFT pack v2:
+
+```text
+recommended next training input: processed/stage17_architecture_policy_adapter_sft_toolmaze_1k.jsonl
+summary: processed/stage17_architecture_policy_adapter_sft_toolmaze_1k.jsonl.summary.json
+target eval: eval_runs/20260701T_stage17_architecture_adapter_sft_toolmaze_1k_target_eval
+classifier eval: eval_runs/20260701T_stage17_enum_classifier_adapter_toolmaze_1k_layers
+rows_written: 1000
+source_mix:
+  rule_distillation = 110
+  perturbation = 890
+next_action:
+  await_human = 322
+  next_subtask = 348
+  replan = 330
+expected_changed:
+  true = 576
+  false = 424
+target eval = 100.00%
+classifier exact/strategist/architect = 100.00%
+classifier mean_prediction_seconds = 0.00007552
+```
+
+Stage18 promotion gate:
+
+```text
+script: scripts/check_architecture_policy_promotion.py
+output: eval_runs/20260701T_stage17_architecture_policy_promotion_gate
+adapter_train_ready = pass
+runtime_shadow_ready = pass
+learned_replacement_ready = fail
+recommendation = promote_runtime_shadow_only
+
+input evidence:
+  target eval rows = 1000, schema/architecture/verifier/policy exact = 100.00%
+  adapter classifier rows = 1000, exact/Strategist/Architect = 100.00%, mean = 0.00007552s
+  ToolMaze hard-negative rows = 5216, exact/Strategist/Architect = 100.00%, mean = 0.00007044s
+  runtime shadow rows = 860, exact = 100.00%
+  ablation no_tool/no_next/no_permission/no_hazard = 0.00% / 59.97% / 77.53% / 64.57%
+
+Interpretation: Stage17 is ready for runtime shadow or guarded wrapper use, but
+not for learned replacement. The learned model or adapter must raise ablated
+exact rates before any claim that rule/tool/hazard priors are no longer needed.
+```
+
+Stage17 prior/guard ablation:
+
+```text
+doc: STAGE17_PRIOR_ABLATION_CN.md
+clean/native output: eval_runs/20260701T_stage17_architecture_policy_ablation_clean1k
+clean/native rows: 1720
+clean/native exact:
+  full = 100.00%
+  no_next_action_prior = 30.93%
+  no_tool_priors = 0.00%
+  no_permission_guards = 70.00%
+  no_hazard_guards = 99.77%
+  tool_priors_only = 69.07%
+
+hard-negative output: eval_runs/20260701T_stage17_architecture_policy_ablation_4912
+hard-negative rows: 4912
+hard-negative exact:
+  full = 100.00%
+  no_next_action_prior = 57.49%
+  no_tool_priors = 0.00%
+  no_permission_guards = 76.14%
+  no_hazard_guards = 68.57%
+  tool_priors_only = 42.51%
+```
+
+Interpretation:
+
+```text
+Stage16 produces an application-facing architecture-policy stack:
+1. runtime shadow matrix for observability,
+2. zero-generation classifier for microsecond serving,
+3. hard-negative suite that covers danger, distractors, stale hints, recoverable tool hazards, and unsolvable calibrated refusal,
+4. Strategist/Architect layer metrics,
+5. targeted rule-distillation rows and Stage17 adapter mix to reduce future wrapper dependence.
+
+Do not treat Stage17 target/classifier eval as model improvement by itself. It
+only proves the training pack is well-formed. Any adapter trained from it must
+return to clean 1k, 4912-row hard-negative, and runtime shadow matrix before
+promotion.
+
+The prior/guard ablation proves that tool priors, next_action priors, and
+permission guards are still load-bearing. Hazard guards look almost redundant on
+clean rows but are essential on hard-negative / unsolvable rows, so they should
+remain a hard safety boundary even if future adapters learn the pattern.
+
+The ToolMaze-style implicit semantic failure extension makes this sharper:
+no_hazard_guards falls to 64.57% on the 5216-row suite. Use the ToolMaze v2
+adapter pack for the next adapter smoke, not the older 4912-only pack.
+
+Stage18 next experiment contract is now written in
+STAGE18_NEXT_EXPERIMENTS_CN.md. The recommended order is ToolMaze adapter smoke,
+shadow-driven active learning, Tool failure quartet, step router, Agent
+Lightning reward bridge, safety enum-head, then Hydra/Medusa JSON-head.
+```
+
+2026-07-01 Stage18 ToolMaze adapter training:
+
+```text
+doc: STAGE18_TOOLMAZE_ADAPTER_RESULTS_CN.md
+new script: scripts/build_architecture_adapter_curriculum.py
+new tests: tests/test_openclaw_architecture_adapter_curriculum.py
+
+curriculum data:
+  processed/stage18_architecture_policy_adapter_curriculum_2k.jsonl
+  rows = 2000
+  clean_anchor = 1600
+  toolmaze_adapter = 400
+  next_subtask / await_human / replan = 1349 / 372 / 279
+
+trained models:
+  models/20260701T-stage18-toolmaze-adapter-160
+  models/20260701T-stage18-curriculum-adapter-80
+  models/20260701T-stage18-curriculum-adapter-20-lr5e6
+
+clean 1k:
+  continue200 baseline raw = schema 99.90%, model/next/context/executor 97.60% / 93.10% / 98.90% / 98.00%, mean 0.1491s
+  toolmaze-only 160 = schema 100.00%, model/next/context/executor 99.40% / 82.60% / 99.10% / 99.40%, mean 0.1459s
+  curriculum 80 = schema 100.00%, model/next/context/executor 97.90% / 88.20% / 98.50% / 99.50%, mean 0.1493s
+  curriculum 20/lr5e-6 = schema 99.90%, model/next/context/executor 97.90% / 93.80% / 99.00% / 98.90%, mean 0.1455s
+
+ToolMaze heldout slice, start_line=1001, rows=1000:
+  continue200 baseline = schema 94.20%, model/next/context/executor 82.90% / 60.40% / 87.70% / 75.30%, mean 0.1948s
+  curriculum 20/lr5e-6 = schema 97.80%, model/next/context/executor 88.90% / 63.60% / 92.70% / 79.40%, mean 0.1814s
+
+Interpretation:
+  ToolMaze-only SFT overfits hard-negative labels and hurts clean next_action.
+  Clean-anchored curriculum helps, but only very low step / low LR produces a positive result.
+  Current best learned candidate is 20260701T-stage18-curriculum-adapter-20-lr5e6/final_adapter.
+  It is still not runtime-ready because ToolMaze hard-negative next_action is only 63.60%.
+  Keep enum classifier / guarded wrapper as the application path; use the 20-step adapter only as an exploration candidate for enum-head or DPO follow-up.
+```
