@@ -53,7 +53,7 @@ class OpenClawArchitecturePolicyWrapperTest(unittest.TestCase):
     def test_wrapper_preserves_variable_next_action_for_execution_tools(self) -> None:
         wrapper = load_wrapper_module()
         row = {
-            "task_preview": "Goal: x Permission mode: BYPASS Planner strategy: audit_astar",
+            "task_preview": "Goal: x Permission mode: REVIEW_ONLY Planner strategy: audit_astar",
             "generated_text": json.dumps({
                 "task_id": "task-2",
                 "tool_name": "file_writer",
