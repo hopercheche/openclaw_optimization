@@ -1,0 +1,97 @@
+{
+  "profile_name": "stage10_structrisk_route_longscriptonly_margin12_sec168_blockcomplete_suppresscomplete",
+  "created_at": "2026-06-29T12:34:00Z",
+  "purpose": "Risk-type-conditioned Stage7/Stage9 route that suppresses complete-with-commands primary rows before generating Stage9.",
+  "status": "experimental",
+  "runtime_boundary": "Agent_Planner only; do not replace backend/openclaw deterministic planner without task-level validation.",
+  "primary_model": {
+    "label": "stage7",
+    "path": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260627T-stage7-verifier-combined3k-500-merged"
+  },
+  "secondary_model": {
+    "label": "stage9",
+    "path": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260628T-stage9-prm-dpo-100-merged"
+  },
+  "generation": {
+    "backend": "transformers",
+    "cuda_visible_devices": "1",
+    "batch_size": 32,
+    "dtype": "bf16",
+    "attn_implementation": "sdpa",
+    "device_placement": "cuda",
+    "sort_by_prompt_length": true,
+    "max_seq_length": 1024,
+    "max_new_tokens": 256,
+    "retry_invalid_max_new_tokens": 272
+  },
+  "secondary_generation": {
+    "max_new_tokens": 168,
+    "retry_invalid_max_new_tokens": 184
+  },
+  "invalid_retry_policy": "Retry repair: do not validate or inspect. Never write python -c, heredocs, multiline commands, or scripts. If outputs look complete, return commands [] and task_complete true. Otherwise use at most two one-line shell commands under 120 characters.",
+  "route_policy": {
+    "type": "structural_risk_threshold",
+    "baseline_label": "stage7",
+    "secondary_label": "stage9",
+    "min_extra_risk_score": 16.0,
+    "switch_margin": 12.0,
+    "long_command_chars": 120,
+    "gate_labels": [
+      "schema_invalid",
+      "long_command",
+      "multiline_command",
+      "script_like_command",
+      "risky_command",
+      "validation_only_command",
+      "complete_with_commands",
+      "incomplete_without_commands",
+      "many_commands"
+    ],
+    "require_any_labels": [
+      "long_command",
+      "multiline_command",
+      "script_like_command"
+    ],
+    "suppress_if_only_labels": [
+      "validation_only_command",
+      "complete_with_commands"
+    ],
+    "suppress_if_any_labels": [
+      "complete_with_commands"
+    ],
+    "reject_secondary_labels": [
+      "complete_with_commands"
+    ],
+    "score_tie_break": [
+      "candidate_score",
+      "prefer_baseline",
+      "shorter_generation"
+    ]
+  },
+  "heldout_1k_online_evidence": {
+    "eval_run": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260629T-stage10-online-route-longscriptonly-margin12-sec168-blockcomplete-suppresscomplete-heldout5001-1k",
+    "baseline": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2294,
+      "long_command_rate": 0.017,
+      "multiline_command_rate": 0.003,
+      "script_like_command_rate": 0.022,
+      "validation_only_command_rate": 0.041,
+      "mean_amortized_request_seconds": 0.206062
+    },
+    "selected": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2301,
+      "long_command_rate": 0.009,
+      "multiline_command_rate": 0.0,
+      "script_like_command_rate": 0.016,
+      "validation_only_command_rate": 0.041,
+      "mean_amortized_request_seconds": 0.217327,
+      "requested_secondary_rate": 0.020,
+      "changed_from_baseline_rate": 0.008,
+      "secondary_rejected_count": 1
+    },
+    "decision": "Speed/safety variant: fastest among current true-online routes and strong structural-risk reduction, but lower overlap than suppressany and blockcomplete."
+  },
+  "design_note": "The suppressany profile was faster but lost some useful Stage9 switches after changing the secondary batch composition. This profile only removes complete-with-commands primary rows."
+}

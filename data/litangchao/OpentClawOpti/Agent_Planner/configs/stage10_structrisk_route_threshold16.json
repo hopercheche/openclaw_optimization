@@ -1,0 +1,96 @@
+{
+  "profile_name": "stage10_structrisk_route_threshold16",
+  "created_at": "2026-06-29T02:22:02Z",
+  "purpose": "Quality/safety-oriented experimental serving route for Agent_Planner.",
+  "status": "experimental",
+  "runtime_boundary": "Agent_Planner only; do not replace backend/openclaw deterministic planner without task-level validation.",
+  "primary_model": {
+    "label": "stage7",
+    "path": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260627T-stage7-verifier-combined3k-500-merged"
+  },
+  "secondary_model": {
+    "label": "stage9",
+    "path": "data/litangchao/OpentClawOpti/Agent_Planner/models/20260628T-stage9-prm-dpo-100-merged"
+  },
+  "generation": {
+    "backend": "transformers",
+    "cuda_visible_devices": "1",
+    "batch_size": 32,
+    "dtype": "bf16",
+    "attn_implementation": "sdpa",
+    "device_placement": "cuda",
+    "sort_by_prompt_length": true,
+    "max_seq_length": 1024,
+    "max_new_tokens": 256,
+    "retry_invalid_max_new_tokens": 272
+  },
+  "invalid_retry_policy": "Retry repair: do not validate or inspect. Never write python -c, heredocs, multiline commands, or scripts. If outputs look complete, return commands [] and task_complete true. Otherwise use at most two one-line shell commands under 120 characters.",
+  "route_policy": {
+    "type": "structural_risk_threshold",
+    "baseline_label": "stage7",
+    "secondary_label": "stage9",
+    "min_extra_risk_score": 16.0,
+    "switch_margin": 4.0,
+    "long_command_chars": 120,
+    "gate_labels": [
+      "schema_invalid",
+      "long_command",
+      "multiline_command",
+      "script_like_command",
+      "risky_command",
+      "validation_only_command",
+      "complete_with_commands",
+      "incomplete_without_commands",
+      "many_commands"
+    ],
+    "score_tie_break": [
+      "candidate_score",
+      "prefer_baseline",
+      "shorter_generation"
+    ]
+  },
+  "heldout_1k_evidence": {
+    "eval_run": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260629T-stage10-dual-stage7-stage9-structrisk-threshold16-margin4-1k",
+    "baseline": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2294,
+      "long_command_rate": 0.017,
+      "script_like_command_rate": 0.022,
+      "validation_only_command_rate": 0.041,
+      "mean_amortized_request_seconds": 0.204767
+    },
+    "selected": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2298,
+      "long_command_rate": 0.008,
+      "script_like_command_rate": 0.014,
+      "validation_only_command_rate": 0.034,
+      "estimated_online_mean_seconds": 0.218011,
+      "considered_extra_rate": 0.063,
+      "changed_from_baseline_rate": 0.017
+    },
+    "decision": "Offline-only evidence; superseded by the true online benchmark, which showed overlap regression and higher latency."
+  },
+  "heldout_1k_online_evidence": {
+    "eval_run": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260629T-stage10-online-route-threshold16-heldout5001-1k",
+    "baseline": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2294,
+      "long_command_rate": 0.017,
+      "script_like_command_rate": 0.022,
+      "validation_only_command_rate": 0.041,
+      "mean_amortized_request_seconds": 0.216283
+    },
+    "selected": {
+      "schema_valid_rate": 1.0,
+      "command_overlap_mean": 0.2287,
+      "long_command_rate": 0.013,
+      "script_like_command_rate": 0.017,
+      "validation_only_command_rate": 0.036,
+      "mean_amortized_request_seconds": 0.242854,
+      "requested_secondary_rate": 0.063,
+      "changed_from_baseline_rate": 0.012
+    },
+    "decision": "Reject for serving promotion: structural risk improves, but command overlap regresses and same-run latency overhead is about 12.3%."
+  }
+}
