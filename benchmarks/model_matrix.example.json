@@ -1,0 +1,39 @@
+{
+  "entries": [
+    {
+      "name": "deterministic_baseline",
+      "runtime": "deterministic",
+      "notes": "Local fallback candidate generation without model provider credentials."
+    },
+    {
+      "name": "as2_deepseek_flash",
+      "runtime": "as2",
+      "required_env": ["DEEPSEEK_API_KEY"],
+      "env": {
+        "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+        "OPENCLAW_DEEPSEEK_MODEL": "deepseek-v4-flash"
+      },
+      "notes": "DeepSeek OpenAI-compatible AS2 planner candidate generation."
+    },
+    {
+      "name": "as2_openai_compatible",
+      "runtime": "as2",
+      "required_env": ["OPENAI_API_KEY"],
+      "env": {
+        "OPENAI_BASE_URL": "https://api.openai.com/v1",
+        "OPENCLAW_OPENAI_MODEL": "gpt-4.1-mini"
+      },
+      "notes": "Generic OpenAI-compatible AS2 planner candidate generation."
+    },
+    {
+      "name": "as2_dashscope_qwen",
+      "runtime": "as2",
+      "required_env": ["DASHSCOPE_API_KEY"],
+      "env": {
+        "DASHSCOPE_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "OPENCLAW_DASHSCOPE_MODEL": "qwen-plus"
+      },
+      "notes": "DashScope OpenAI-compatible AS2 planner candidate generation."
+    }
+  ]
+}

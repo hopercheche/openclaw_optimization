@@ -27,6 +27,10 @@ ALLOWED_TOOLS = {
     "file_writer",
     "command_runner",
     "deploy_runner",
+    "mobile_gui_runner",
+    "mobile_cli_runner",
+    "mcp_tool_runner",
+    "safety_guard",
 }
 
 OPENCLAW_TOOL_NAMES = {

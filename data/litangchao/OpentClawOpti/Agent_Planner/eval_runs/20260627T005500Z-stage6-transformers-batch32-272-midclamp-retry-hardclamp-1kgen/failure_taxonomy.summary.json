@@ -1,0 +1,141 @@
+{
+  "created_at": "2026-06-27T04:35:22.442733Z",
+  "generations": "data/litangchao/OpentClawOpti/Agent_Planner/eval_runs/20260627T005500Z-stage6-transformers-batch32-272-midclamp-retry-hardclamp-1kgen/generations.jsonl",
+  "total_rows": 1000,
+  "long_command_chars": 120,
+  "low_overlap_threshold": 0.05,
+  "label_counts": {
+    "complete_with_commands": 22,
+    "long_command": 24,
+    "low_command_overlap": 409,
+    "multiline_command": 11,
+    "ok": 521,
+    "script_like_command": 54,
+    "validation_only_command": 71
+  },
+  "label_rates": {
+    "complete_with_commands": 0.022,
+    "long_command": 0.024,
+    "low_command_overlap": 0.409,
+    "multiline_command": 0.011,
+    "ok": 0.521,
+    "script_like_command": 0.054,
+    "validation_only_command": 0.071
+  },
+  "schema_valid_rate": 1.0,
+  "low_overlap_rate": 0.409,
+  "long_command_rate": 0.024,
+  "validation_only_command_rate": 0.071,
+  "mean_command_overlap": 0.1598,
+  "mean_max_command_chars": 38.295,
+  "p95_max_command_chars": 82,
+  "worst_examples": [
+    {
+      "line_number": 562,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "multiline_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 430,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced the required files. The JSON and CSV look correct. However, we should verify that the JSON's total_sales_value matches the sum of total_value in CSV (should be same). Also ensure that the missing fields...\",\"plan\":\"1. Check the JSON file content fully to see all entries.\\n2. Verify that the total_sales_value matches the sum of total_value in CSV.\\n3. Ensure that the missing fields count includes only missing fields (not duplicates).\\n4. Ensur"
+    },
+    {
+      "line_number": 560,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "multiline_command",
+        "script_like_command",
+        "validation_only_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 276,
+      "generated_preview": "{\"analysis\":\"The previous commands had syntax errors due to using semicolons incorrectly. We need to fix them. Also we should verify that the CSV file is correctly formatted and that the JSON summary matches expectations. Let's first check the CSV header and a...\",\"plan\":\"1. Check CSV header and a few lines.\\n2. Write a small Python script to validate the CSV format (no extra columns).\\n3. Verify that all product_ids are present in the catalog.\\n4. Compute sum of total_value from CSV and compare"
+    },
+    {
+      "line_number": 196,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 182,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The cleaned CSV has 30 rows (including header). The summary JSON shows three buildings with computed metrics. The anomalies file is empty (no anomalies detected). We need to verify that the...\",\"plan\":\"1. Check the entire cleaned CSV to see if any rows have temperature > 50 or humidity > 100. 2. Verify that the sorting is correct by checking timestamps. 3. Ensure that the rounding of avg_temperature is correct (should be...\",\"command"
+    },
+    {
+      "line_number": 280,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 149,
+      "generated_preview": "{\"analysis\":\"The CSV file has been created successfully with correct headers and data. The content matches expectations: all rows are in-transit shipments (status 'in_transit'), sorted by reconciliation key ascending, unique destinations present, and numeric values...\",\"plan\":\"Run a quick validation using Python to ensure no errors. Then finalize.\",\"commands\":[{\"keystrokes\":\"python3 -c \\\"import csv; import json; with open('input/shipments.jsonl') as f: lines = [json.loads(l) for l in f]; print('"
+    },
+    {
+      "line_number": 580,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 148,
+      "generated_preview": "{\"analysis\":\"The JSON report has been generated successfully. The structure matches the required format. All calculations appear correct based on manual verification. The file is...\",\"plan\":\"Run a quick validation using Python to ensure the JSON loads correctly and that all required fields are present. Then we can consider the task complete.\",\"commands\":[{\"keystrokes\":\"python3 -c \\\"import json; data = json.load(open('/app/output/event_report.json')); print('JSON loaded successfully'); print('Key"
+    },
+    {
+      "line_number": 78,
+      "labels": [
+        "low_command_overlap",
+        "long_command",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 144,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The JSON looks correct with proper structure, sorting, and rounding. The CSV shows total updates per product,...\",\"plan\":\"1. Validate JSON syntax using python's json.tool to ensure no errors.\\n2. Check that all required fields are present in each object.\\n3. Verify that the sum of...\",\"commands\":[{\"keystrokes\":\"python3 -m json.tool /app/reconciled_inventory.json > /dev/null && echo 'JSON is valid'\\n\",\"duration\":0.1},{\"keystrokes\":\"py"
+    },
+    {
+      "line_number": 214,
+      "labels": [
+        "low_command_overlap",
+        "long_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 121,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The counts match expectations: cleaned supplier products = 10, cleaned manufacturer products = 8, merged prod...\",\"plan\":\"1. Validate JSON files with jq if available, else use python to ensure they are valid.\\n2. Check that price values have exactly two decimal places (e.g., 76.49,...\",\"commands\":[{\"keystrokes\":\"python3 -m json.tool /app/output/cleaned_supplier.json > /dev/null && echo 'cleaned_supplier.json is valid JSON'\\n\",\"durati"
+    },
+    {
+      "line_number": 151,
+      "labels": [
+        "low_command_overlap",
+        "script_like_command"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 117,
+      "generated_preview": "{\"analysis\":\"The script ran successfully and produced outputs. The CSV has 41 rows (including header). Need to verify that interpolation/extrapolation logic is correct. Also need...\",\"plan\":\"1. View anomaly_report.json to see current content.\\n2. Write a small verification script to compute expected interpolated/extrapolated counts and compare with actual.\\n3....\",\"commands\":[{\"keystrokes\":\"cat /app/output/anomaly_report.json\\n\",\"duration\":0.1},{\"keystrokes\":\"python3 -c \\\"import json; data=json."
+    },
+    {
+      "line_number": 642,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 111,
+      "generated_preview": "{\"analysis\":\"We have created the script and run it. The output files appear to have been generated. Need to verify that they meet the requirements: JSON is valid, timestamps are in...\",\"plan\":\"1. Check error.log content.\\n2. Validate session_summary.json with python's json module.\\n3. Validate statistics.json similarly.\\n4. Ensure no missing fields and that...\",\"commands\":[{\"keystrokes\":\"cat /app/error.log\\n\",\"duration\":0.1},{\"keystrokes\":\"python3 -m json.tool /app/output/session_summary.json > "
+    },
+    {
+      "line_number": 528,
+      "labels": [
+        "low_command_overlap"
+      ],
+      "command_overlap": 0.0,
+      "max_command_chars": 100,
+      "generated_preview": "{\"analysis\":\"The outputs look good but we need to verify that all rows in consolidated_sales.csv are valid (no missing values). Also ensure that the CSV columns are in the correct order and that the timestamp format matches ISO 8601 with 'Z'...\",\"plan\":\"1. Check for any rows with missing values in consolidated_sales.csv using awk. 2. Count rows per region and compare with regional_summary. 3. Verify top_customers ordering by total_spent descending. 4. Ensure processing_stat...\",\"commands\":[{\"key"
+    }
+  ]
+}

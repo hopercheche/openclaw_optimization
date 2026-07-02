@@ -1,0 +1,67 @@
+{
+  "track": "Agent_Planner",
+  "stage_order": [
+    "schema_inspection",
+    "sft_normalization",
+    "sft_warm_start",
+    "agentscope_rollout_collection",
+    "automatic_reward_filtering",
+    "agent_lightning_rl"
+  ],
+  "primary_sft_data": {
+    "name": "qwen_terminal_toolbench_2b_full",
+    "path": "raw/qwen_terminal_toolbench_2b_full/qwen35_2b_full_terminal_toolcall_processed_v1",
+    "format": "arrow",
+    "features": {
+      "text": "string"
+    },
+    "rows": 1011776
+  },
+  "supporting_sft_data": {
+    "name": "toolbench_v1",
+    "path": "raw/toolbench_v1",
+    "format": "parquet"
+  },
+  "reward_data": {
+    "name": "tau_bench_trajectories",
+    "path": "raw/tau_bench_trajectories",
+    "format": "jsonl",
+    "reward_signal": "eval_result.score and eval_result.db_match"
+  },
+  "agent_lightning_bridge": {
+    "package_status": "installed from external/agent-lightning as editable agentlightning 0.3.1",
+    "source_repo": "https://github.com/microsoft/agent-lightning",
+    "local_source": "external/agent-lightning",
+    "git_head": "0b40cb7",
+    "local_transition_schema": "agent_lightning_transition_v0",
+    "input": "rewards/tau_bench_rewards.jsonl",
+    "output": "rewards/tau_bench_agent_lightning_transitions.jsonl",
+    "script": "scripts/build_agent_lightning_transitions.py",
+    "credit_assignment": "final"
+  },
+  "planner_model_objective": {
+    "input": [
+      "goal",
+      "state_summary",
+      "available_tools",
+      "constraints"
+    ],
+    "target": [
+      "next_action",
+      "tool_call_or_plan_step",
+      "policy_decision"
+    ],
+    "metrics": [
+      "task_success_rate",
+      "invalid_tool_rate",
+      "policy_violation_rate",
+      "loop_rate",
+      "latency"
+    ]
+  },
+  "recommended_model_start": {
+    "sft_base": "Qwen/Qwen3.5-2B or another small tool-capable causal LM",
+    "adapter": "LoRA/QLoRA",
+    "why": "fast enough for planner policy inference and compatible with selected processed Qwen ToolBench text."
+  }
+}

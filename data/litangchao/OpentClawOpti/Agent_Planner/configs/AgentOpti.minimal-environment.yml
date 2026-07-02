@@ -1,0 +1,19 @@
+name: AgentOpti
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - pyarrow==24.0.0
+      - pandas==3.0.3
+      - datasets==5.0.0
+      - fsspec[http]==2026.4.0
+      - transformers==5.12.1
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0+cu128
+      - accelerate==1.14.0
+      - peft==0.19.1
+      - trl==1.6.0
+      - agentscope==2.0.2
+      - agentlightning==0.3.1

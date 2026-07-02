@@ -1,0 +1,58 @@
+{
+  "track": "Agent_Planner",
+  "storage_root": "data/litangchao/OpentClawOpti/Agent_Planner",
+  "size_limit_gib": 50,
+  "selected_primary_source": "qwen_terminal_toolbench_2b_full",
+  "sources": {
+    "qwen_terminal_toolbench_2b_full": {
+      "repo_type": "dataset",
+      "repo_id": "LLM-OS-Models/Qwen-Terminal-ToolBench-Processed-Tokenized",
+      "revision": "main",
+      "license": "apache-2.0",
+      "selected_prefixes": [
+        "qwen35_2b_full_terminal_toolcall_processed_v1/"
+      ],
+      "skip_cache_files_by_default": true,
+      "reported_rows": 1011776,
+      "reported_subset_size_gib": 36.26,
+      "repo_used_storage_bytes": 77364764237,
+      "reason": "Large processed terminal/tool-call SFT dataset below the 50 GiB constraint."
+    },
+    "toolbench_v1": {
+      "repo_type": "dataset",
+      "repo_id": "tuandunghcmut/toolbench-v1",
+      "revision": "main",
+      "license": "apache-2.0",
+      "selected_prefixes": [
+        "data/",
+        "benchmark/",
+        "README.md"
+      ],
+      "repo_used_storage_bytes": 540878867,
+      "size_category": "100K<n<1M",
+      "reason": "Interpretable ToolBench/ToolLLaMA data for schema inspection and baseline SFT."
+    },
+    "tau_bench_trajectories": {
+      "repo_type": "dataset",
+      "repo_id": "AgentSuite/tau-bench-trajectories",
+      "revision": "main",
+      "license": "unspecified_on_hub_metadata",
+      "selected_prefixes": [
+        "README.md",
+        "gpt-4.1-mini.jsonl",
+        "gpt-4o-mini.jsonl",
+        "gpt-oss-20b.jsonl",
+        "Qwen3-235B-A22B-FP8.jsonl"
+      ],
+      "models": 30,
+      "tasks_per_model": 165,
+      "reason": "Trajectory and eval_result data for reward filtering experiments."
+    }
+  },
+  "route": {
+    "sft_warm_start": "Train a fast planner policy on ToolBench-style tool-call trajectories.",
+    "runtime_rollouts": "Use AgentScope 2.0 event/middleware/permission/sandbox runtime to collect trajectories.",
+    "reward_filtering": "Use automatic verifier signals as rewards: success, invalid tool, policy violation, loops, unsafe auto-allow.",
+    "rl_layer": "Use Agent Lightning after SFT when verifier rewards are stable."
+  }
+}

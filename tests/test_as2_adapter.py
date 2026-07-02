@@ -21,7 +21,7 @@ class AS2AdapterTest(unittest.TestCase):
         status = detect_as2()
 
         self.assertTrue(status.available)
-        self.assertEqual(status.package_version, "2.0.1")
+        self.assertTrue(status.package_version.startswith("2.0."))
         self.assertTrue(status.primitives["Agent"])
         self.assertIn("REPLY_START", status.event_types)
 
