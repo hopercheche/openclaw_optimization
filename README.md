@@ -20,8 +20,10 @@ OpenClaw Capstone 方向一：**最优 LLM 路由** — 第一阶段 MVP（Rule-
 | 规则路由器 | `src/router/rule_based.py` | 关键词 / 长度 / 复杂度启发式 |
 | 推理 Pipeline | `src/pipeline/inference.py` | 输入 → 路由 → 调用 → 输出 |
 | 评估指标 | `src/evaluation/metrics.py` | cost / latency / tier 分布 |
+| **特征提取** | `src/feature/` | semantic / complexity / reasoning 特征向量 |
 | API 服务 | `src/api/server.py` | FastAPI REST 接口 |
 | CLI Demo | `demo.py` | 命令行演示与基准测试 |
+| 特征 CLI | `extract_features.py` | 单条/批量特征提取 |
 
 ## 快速开始
 
@@ -38,7 +40,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-默认使用 `PROVIDER_MODE=mock`，无需 API Key 即可运行 Demo。
+默认使用 `PROVIDER_MODE=mock` 和 `EMBEDDING_MODE=hash`，无需 API Key 或模型下载即可运行。
 
 接入真实 API 时：
 
@@ -55,6 +57,16 @@ LARGE_MODEL=gpt-4
 
 也支持 OpenRouter、DashScope 等 OpenAI 兼容端点。
 
+语义 embedding 模式（`EMBEDDING_MODE`）：
+
+| 模式 | 说明 |
+|------|------|
+| `hash`（默认） | 本地确定性 384 维向量，无需下载，适合先跑通 |
+| `bge` | `BAAI/bge-small-en-v1.5` via sentence-transformers |
+| `auto` | 优先 bge，失败时回退 hash |
+
+使用 BGE 时需额外安装：`pip install sentence-transformers`
+
 ### 3. 运行 Demo
 
 ```bash
@@ -68,7 +80,32 @@ python demo.py query "请解释为什么梯度下降能够收敛"
 python demo.py benchmark --file data/sample_queries.txt -o report.json
 ```
 
-### 4. 启动 API 服务
+### 4. 特征提取
+
+```bash
+# 单条 query 特征
+python extract_features.py extract "Explain why Transformer outperforms RNN."
+
+# 批量提取
+python extract_features.py batch --file data/sample_queries.txt -o features.json
+
+# 运行特征模块测试
+python tests/test_feature.py
+```
+
+输出 Feature Schema：
+
+```python
+{
+    "embedding": [...],           # 384-d semantic vector
+    "token_count": 125,
+    "char_count": 680,
+    "sentence_count": 4,
+    "reasoning_keyword_count": 3
+}
+```
+
+### 5. 启动 API 服务
 
 ```bash
 python run_server.py
@@ -80,6 +117,7 @@ API 端点：
 - `GET /health` — 健康检查
 - `POST /query` — 路由 + 推理（完整链路）
 - `POST /route` — 仅路由决策（不调用模型）
+- `POST /features` — 特征提取（semantic + complexity + reasoning）
 - `POST /benchmark` — 批量基准测试
 
 ## 路由规则
@@ -109,8 +147,14 @@ strategist-mvp/
 │   ├── router/             # Rule-based Router
 │   ├── pipeline/           # 推理 Pipeline
 │   ├── evaluation/         # 评估指标
+│   ├── feature/            # 特征提取模块
+│   │   ├── semantic.py     # 384-d embedding
+│   │   ├── complexity.py   # token/char/sentence
+│   │   ├── reasoning.py    # 推理关键词计数
+│   │   └── extractor.py    # 统一接口
 │   └── api/                # FastAPI 服务
-├── demo.py                 # CLI 入口
+├── extract_features.py     # 特征提取 CLI
+├── demo.py                 # 路由 Demo CLI
 ├── run_server.py           # API 服务入口
 └── requirements.txt
 ```
@@ -119,28 +163,13 @@ strategist-mvp/
 
 | 阶段 | 内容 |
 |------|------|
-| **Phase 1 (当前)** | Rule-based Router MVP |
-| Phase 2 | Feature-based Router（embedding + ML 分类） |
-| Phase 3 | Cost-aware Routing（LLM-as-Judge 偏好标注） |
-| Phase 4 | FrugalGPT Cascade（small → mid → large 级联） |
-| Phase 5 | 系统评估与消融实验 |
+| Phase 1 | Rule-based Router MVP |
+| **Phase 2 (当前)** | Feature Extraction（semantic / complexity / reasoning） |
+| Phase 3 | Feature-based Router（ML 分类训练） |
+| Phase 4 | Cost-aware Routing（LLM-as-Judge 偏好标注） |
+| Phase 5 | FrugalGPT Cascade（small → mid → large 级联） |
+| Phase 6 | 系统评估与消融实验 |
 
 ## 与 OpenClaw 集成
 
 本 MVP 设计为可插拔模块，后续可通过 OpenClaw Plugin SDK 封装为 Provider Plugin，替换默认的单模型调用路径。
-
-## 运行
-cd strategist-mvp
-pip3 install -r requirements.txt
-
-# 无需 API Key 的离线 Demo（默认 mock 模式）
-python3 demo.py demo
-
-# 单条查询
-python3 demo.py query "请解释为什么梯度下降能够收敛"
-
-# 基准测试
-python3 demo.py benchmark --file data/sample_queries.txt -o report.json
-
-# 启动 API 服务 → http://localhost:8000/docs
-python3 run_server.py

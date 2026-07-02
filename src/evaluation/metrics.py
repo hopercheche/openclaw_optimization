@@ -72,6 +72,17 @@ class BenchmarkReport:
             "total_cost_usd": round(self.total_cost_usd, 6),
             "tier_distribution": self.tier_distribution,
             "cost_comparison": self.cost_vs_always_large(),
+            "queries": [
+                {
+                    "query": r.query,
+                    "tier": r.tier.value,
+                    "latency_ms": round(r.latency_ms, 1),
+                    "total_tokens": r.total_tokens,
+                    "cost_usd": round(r.cost_usd, 6),
+                    "confidence": round(r.confidence, 3),
+                }
+                for r in self.results
+            ],
         }
 
 
