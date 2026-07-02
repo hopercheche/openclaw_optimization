@@ -12,15 +12,17 @@ from pydantic import BaseModel, Field
 
 from src.config import get_provider_mode
 from src.evaluation import build_report
+from src.feature import FeatureExtractor
 from src.pipeline import InferencePipeline
 
 app = FastAPI(
     title="The Strategist MVP",
     description="Rule-based LLM Routing API for OpenClaw Capstone",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 pipeline = InferencePipeline()
+feature_extractor = FeatureExtractor()
 
 
 class QueryRequest(BaseModel):
@@ -43,13 +45,28 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     provider: str
+    embedding_backend: str
     version: str
+
+
+class FeatureResponse(BaseModel):
+    embedding: list[float]
+    token_count: int
+    char_count: int
+    sentence_count: int
+    reasoning_keyword_count: int
+    embedding_backend: str
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     from src import __version__
-    return HealthResponse(status="ok", provider=get_provider_mode(), version=__version__)
+    return HealthResponse(
+        status="ok",
+        provider=get_provider_mode(),
+        embedding_backend=feature_extractor.embedding_backend,
+        version=__version__,
+    )
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -81,6 +98,19 @@ def route_only(req: QueryRequest) -> dict:
         "reasons": decision.reasons,
         "scores": decision.scores,
     }
+
+
+@app.post("/features", response_model=FeatureResponse)
+def extract_features(req: QueryRequest) -> FeatureResponse:
+    feature = feature_extractor.extract(req.query)
+    return FeatureResponse(
+        embedding=feature.embedding,
+        token_count=feature.token_count,
+        char_count=feature.char_count,
+        sentence_count=feature.sentence_count,
+        reasoning_keyword_count=feature.reasoning_keyword_count,
+        embedding_backend=feature.metadata.get("backend", "unknown"),
+    )
 
 
 @app.post("/benchmark")

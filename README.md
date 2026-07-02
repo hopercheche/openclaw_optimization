@@ -10,7 +10,16 @@ The expected output is not only a conceptual design. It should be a runnable pro
 
 The core research question for my part is:
 
-> Can an explicit planner search layer improve an agent's tool selection, permission handling, and task success rate while keeping every decision auditable?
+| 模块 | 路径 | 功能 |
+|------|------|------|
+| 统一模型接口 | `src/models/` | OpenAI 兼容 API + Mock 离线演示 |
+| 规则路由器 | `src/router/rule_based.py` | 关键词 / 长度 / 复杂度启发式 |
+| 推理 Pipeline | `src/pipeline/inference.py` | 输入 → 路由 → 调用 → 输出 |
+| 评估指标 | `src/evaluation/metrics.py` | cost / latency / tier 分布 |
+| **特征提取** | `src/feature/` | semantic / complexity / reasoning 特征向量 |
+| API 服务 | `src/api/server.py` | FastAPI REST 接口 |
+| CLI Demo | `demo.py` | 命令行演示与基准测试 |
+| 特征 CLI | `extract_features.py` | 单条/批量特征提取 |
 
 ## 2. Technical Architecture and Solution Plan
 
@@ -39,7 +48,7 @@ The main backend modules are:
 | Benchmarking | `backend/openclaw/benchmark.py`, `backend/openclaw/model_matrix.py` | Evaluates planner strategies and provider/model configurations. |
 | Learned planner hint | `backend/openclaw/planner_profile_model.py`, `scripts/train_planner_profile_model.py` | Trains a lightweight Naive Bayes profile model for no-hint routing of workflow/tool profiles. |
 
-The baseline strategy is `greedy_topk`, which independently ranks candidate actions and chooses the highest-scoring steps. The optimized strategies are:
+默认使用 `PROVIDER_MODE=mock` 和 `EMBEDDING_MODE=hash`，无需 API Key 或模型下载即可运行。
 
 - `audit_astar`: a bounded A*-style planner that searches over candidate tool/action paths. It scores paths using impact, evidence value, reversibility, risk, permission friction, repeated actions, and missing required tools.
 - `audit_reflexion`: a reflective variant that starts from the A* path and applies deterministic review/repair steps. It adds `reflection_*` events so the revision process is also visible in the audit trail.
@@ -50,15 +59,17 @@ The architecture intentionally keeps OpenClaw in charge of permission checks and
 
 By the midterm checkpoint, my part has the following working outputs:
 
-- A runnable backend planner service with REST and SSE endpoints.
-- A static frontend console under `frontend/` for creating runs, viewing live events, and reading audit reports.
-- A local permission engine that classifies actions as `allow`, `ask`, or `deny`.
-- Three planner strategies: `greedy_topk`, `audit_astar`, and `audit_reflexion`.
-- AgentScope 2 integration boundaries with deterministic fallback when provider credentials are not configured.
-- A benchmark harness with dev and holdout splits.
-- Converted and normalized planner task suites from PhoneHarness, tau2-bench-data, ToolBench, and SkillsBench.
-- A lightweight planner profile model trained from local multi-source fixtures.
-- Persisted benchmark reports, JSON metrics, and per-run audit artifacts.
+语义 embedding 模式（`EMBEDDING_MODE`）：
+
+| 模式 | 说明 |
+|------|------|
+| `hash`（默认） | 本地确定性 384 维向量，无需下载，适合先跑通 |
+| `bge` | `BAAI/bge-small-en-v1.5` via sentence-transformers |
+| `auto` | 优先 bge，失败时回退 hash |
+
+使用 BGE 时需额外安装：`pip install sentence-transformers`
+
+### 3. 运行 Demo
 
 The latest deterministic benchmark uses 88 tasks, including 61 dev tasks and 27 holdout tasks, with 3 repeats per strategy. It compares the greedy baseline against the optimized planner strategies.
 
@@ -70,7 +81,32 @@ The latest deterministic benchmark uses 88 tasks, including 61 dev tasks and 27 
 
 On the holdout split, both optimized strategies reached 100.00% success, while `greedy_topk` reached 11.11%. This suggests that explicit planning improves the benchmark outcomes without introducing safety regressions in the local deterministic setting.
 
-The planner profile model also provides initial no-hint generalization evidence. It was trained on 325 local examples from PhoneHarness, tau2, ToolBench, and SkillsBench. Its holdout accuracy is 100.00% for planner profile prediction, 95.06% for execution-tool prediction, and 64.20% for policy-mode prediction.
+### 4. 特征提取
+
+```bash
+# 单条 query 特征
+python extract_features.py extract "Explain why Transformer outperforms RNN."
+
+# 批量提取
+python extract_features.py batch --file data/sample_queries.txt -o features.json
+
+# 运行特征模块测试
+python tests/test_feature.py
+```
+
+输出 Feature Schema：
+
+```python
+{
+    "embedding": [...],           # 384-d semantic vector
+    "token_count": 125,
+    "char_count": 680,
+    "sentence_count": 4,
+    "reasoning_keyword_count": 3
+}
+```
+
+### 5. 启动 API 服务
 
 ## 4. Evidence of Current Outputs
 
@@ -95,12 +131,11 @@ The current evidence is stored directly in the repository:
 
 Useful reproduction commands:
 
-```bash
-python -m unittest discover -s tests
-python backend/openclaw/benchmark.py --repeats 3
-python backend/openclaw/benchmark.py --split holdout --repeats 3
-OPENCLAW_PLANNER_STRATEGY=audit_reflexion scripts/start_backend.sh
-```
+- `GET /health` — 健康检查
+- `POST /query` — 路由 + 推理（完整链路）
+- `POST /route` — 仅路由决策（不调用模型）
+- `POST /features` — 特征提取（semantic + complexity + reasoning）
+- `POST /benchmark` — 批量基准测试
 
 No final UI screenshots are committed yet. Before the group report is submitted, I can capture screenshots of the frontend console, event timeline, and generated `audit.md` page as visual evidence.
 
@@ -116,33 +151,41 @@ The fourth limitation is scope. My work focuses on the Planner direction. The br
 
 ## 6. Plan and Goal for the Final Submission
 
-For the final project, my plan is to strengthen the Planner contribution in four ways:
+```
+strategist-mvp/
+├── config/models.yaml      # 模型池与路由阈值
+├── data/sample_queries.txt # 样例测试数据
+├── src/
+│   ├── models/             # LLM Provider 抽象层
+│   ├── router/             # Rule-based Router
+│   ├── pipeline/           # 推理 Pipeline
+│   ├── evaluation/         # 评估指标
+│   ├── feature/            # 特征提取模块
+│   │   ├── semantic.py     # 384-d embedding
+│   │   ├── complexity.py   # token/char/sentence
+│   │   ├── reasoning.py    # 推理关键词计数
+│   │   └── extractor.py    # 统一接口
+│   └── api/                # FastAPI 服务
+├── extract_features.py     # 特征提取 CLI
+├── demo.py                 # 路由 Demo CLI
+├── run_server.py           # API 服务入口
+└── requirements.txt
+```
 
 1. Run model-backed AS2/provider benchmarks with real credentials and compare them against the deterministic fallback.
 2. Expand benchmark tasks with more realistic OpenClaw workflows, especially repo-grounded editing, validation, and deployment-safety scenarios.
 3. Improve the reflective planner only if it beats or matches `audit_astar` under the same holdout protocol.
 4. Add final report evidence, including frontend screenshots, benchmark tables, generated audit reports, and a concise architecture diagram.
 
-My target final deliverable is a planner module that the team can present as a measurable optimization layer: baseline vs optimized planner, clear architecture, reproducible benchmark protocol, and auditable run artifacts.
+| 阶段 | 内容 |
+|------|------|
+| Phase 1 | Rule-based Router MVP |
+| **Phase 2 (当前)** | Feature Extraction（semantic / complexity / reasoning） |
+| Phase 3 | Feature-based Router（ML 分类训练） |
+| Phase 4 | Cost-aware Routing（LLM-as-Judge 偏好标注） |
+| Phase 5 | FrugalGPT Cascade（small → mid → large 级联） |
+| Phase 6 | 系统评估与消融实验 |
 
 ## 7. My Role and Contribution in the Team
 
-My team responsibility is the Planner direction. My contribution is to turn the planner idea into a working prototype and evidence package.
-
-Specifically, I contributed:
-
-- Designed the audit-first planner architecture.
-- Implemented the backend planner runtime and API flow.
-- Implemented baseline and optimized planner strategies.
-- Integrated the AgentScope 2 runtime boundary.
-- Built the permission gate and audit logging path.
-- Built benchmark tasks, evaluation metrics, and report generation.
-- Converted external planner/workflow datasets into local OpenClaw benchmark fixtures.
-- Trained and evaluated the lightweight planner profile model.
-- Wrote technical documentation for architecture, benchmark design, and project progress.
-
-## 8. AI Usage Statement
-
-I used AI coding assistants, including ChatGPT/Codex, to help with implementation planning, code drafting, debugging, documentation, and summarizing benchmark evidence. AI was used as an assistant for generating and refining code, organizing report language, and checking that the written explanation matched the repository artifacts.
-
-I reviewed the generated code and documentation, selected the final technical direction, ran or inspected the benchmark evidence, and kept the final implementation grounded in the actual project files. No secret keys were provided to AI tools, and API credentials are expected to remain in local environment variables rather than committed files.
+本 MVP 设计为可插拔模块，后续可通过 OpenClaw Plugin SDK 封装为 Provider Plugin，替换默认的单模型调用路径。

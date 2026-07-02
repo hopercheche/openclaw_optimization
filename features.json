@@ -1,0 +1,50 @@
+[
+  {
+    "query": "\"\"\"Sample queries for benchmark testing.\"\"\"",
+    "token_count": 8,
+    "char_count": 43,
+    "sentence_count": 2,
+    "reasoning_keyword_count": 0,
+    "embedding_dim": 384
+  },
+  {
+    "query": "今天天气怎么样？",
+    "token_count": 8,
+    "char_count": 8,
+    "sentence_count": 1,
+    "reasoning_keyword_count": 0,
+    "embedding_dim": 384
+  },
+  {
+    "query": "什么是机器学习？",
+    "token_count": 8,
+    "char_count": 8,
+    "sentence_count": 1,
+    "reasoning_keyword_count": 0,
+    "embedding_dim": 384
+  },
+  {
+    "query": "请解释为什么梯度下降在凸优化问题中能够收敛到全局最优。",
+    "token_count": 27,
+    "char_count": 27,
+    "sentence_count": 1,
+    "reasoning_keyword_count": 3,
+    "embedding_dim": 384
+  },
+  {
+    "query": "Compare and contrast supervised learning vs unsupervised learning.",
+    "token_count": 8,
+    "char_count": 66,
+    "sentence_count": 1,
+    "reasoning_keyword_count": 1,
+    "embedding_dim": 384
+  },
+  {
+    "query": "Prove that the square root of 2 is irrational.",
+    "token_count": 9,
+    "char_count": 46,
+    "sentence_count": 1,
+    "reasoning_keyword_count": 1,
+    "embedding_dim": 384
+  }
+]

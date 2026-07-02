@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from src.config import load_config
+from src.feature import FeatureExtractor
 from src.router.base import BaseRouter
 from src.types import ModelTier, RoutingDecision
 
@@ -15,14 +16,17 @@ class RuleBasedRouter(BaseRouter):
     - Reasoning keyword detection (why, compare, explain, ...)
     - Input length thresholds
     - Simple complexity heuristics (sentence count, question marks, code blocks)
+
+    Now integrated with FeatureExtractor for unified feature extraction.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, feature_extractor: FeatureExtractor | None = None) -> None:
         cfg = load_config()["router"]
         self._keywords = [k.lower() for k in cfg["reasoning_keywords"]]
         self._length = cfg["length_thresholds"]
         self._complexity = cfg["complexity_thresholds"]
         self._weights = cfg["weights"]
+        self._feature_extractor = feature_extractor or FeatureExtractor()
 
     def _keyword_score(self, query: str) -> tuple[float, list[str]]:
         lower = query.lower()
@@ -33,7 +37,9 @@ class RuleBasedRouter(BaseRouter):
         return score, [f"检测到推理关键词: {', '.join(hits[:5])}"]
 
     def _length_score(self, query: str) -> tuple[float, list[str]]:
-        n = len(query)
+        # Use FeatureExtractor to get character count
+        features = self._feature_extractor.extract(query)
+        n = features.char_count
         if n <= self._length["short"]:
             return 0.0, [f"输入较短 ({n} chars) → 倾向 small"]
         if n <= self._length["medium"]:
@@ -44,8 +50,10 @@ class RuleBasedRouter(BaseRouter):
         reasons: list[str] = []
         score = 0.0
 
-        sentences = re.split(r"[.!?。！？\n]+", query)
-        sentence_count = len([s for s in sentences if s.strip()])
+        # Use FeatureExtractor to get sentence count
+        features = self._feature_extractor.extract(query)
+        sentence_count = features.sentence_count
+
         if sentence_count >= 3:
             score += 0.3
             reasons.append(f"多句结构 ({sentence_count} 句)")
@@ -63,7 +71,8 @@ class RuleBasedRouter(BaseRouter):
             score += 0.2
             reasons.append("包含数学/公式信号")
 
-        word_count = len(query.split())
+        # Use FeatureExtractor to get word count (token_count as approximation)
+        word_count = features.token_count
         if word_count > 80:
             score += 0.2
             reasons.append(f"词汇量较大 ({word_count} words)")
