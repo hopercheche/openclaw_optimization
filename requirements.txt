@@ -1,12 +1,5 @@
-openai>=1.40.0
-python-dotenv>=1.0.0
-pyyaml>=6.0
-fastapi>=0.115.0
-uvicorn>=0.30.0
-pydantic>=2.0.0
-httpx>=0.27.0
-rich>=13.0.0
 numpy>=1.24.0
-
-# Optional: real BGE embedding (set EMBEDDING_MODE=bge)
-# sentence-transformers>=2.2.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+sentence-transformers>=2.2.0
