@@ -114,10 +114,16 @@ def build_task_config() -> dict[str, Any]:
 
     api_url = os.getenv("EVALSCOPE_API_URL")
     api_key = os.getenv("EVALSCOPE_API_KEY")
+    dataset_dir = os.getenv("EVALSCOPE_DATASET_DIR")
+    dataset_hub = os.getenv("EVALSCOPE_DATASET_HUB")
     if api_url:
         cfg["api_url"] = api_url
     if api_key:
         cfg["api_key"] = api_key
+    if dataset_dir:
+        cfg["dataset_dir"] = dataset_dir
+    if dataset_hub:
+        cfg["dataset_hub"] = dataset_hub
 
     return cfg
 

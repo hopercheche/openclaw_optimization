@@ -1,8 +1,36 @@
 # OpenClaw CLI Harness EvalScope 开发记录
 
-更新时间：2026-07-09
+更新时间：2026-07-10
 
 本文记录本项目中 OpenClaw 作为 EvalScope 外部 Agent CLI harness 的接入过程、镜像构建方式、服务启动方式、EvalScope 评测方式、验证结果和踩坑修复。
+
+## 0. Python 环境与依赖
+
+项目要求 Python 3.10 或更高版本，当前开发环境使用 Python 3.12。服务器部署时在项目根目录创建虚拟环境并安装依赖：
+
+```bash
+cd /path/to/AIE4902
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+`requirements.txt` 中的 EvalScope 固定到本项目已经验证过的 GitHub 源码提交，以保证 `AgentRunner`、external agent bridge 等接口与当前实现一致；AgentScope 固定为 `2.0.3`，并启用示例服务需要的 FastAPI 和 Redis 依赖。
+
+Python requirements 不负责安装以下系统组件：
+
+- Git，用于安装固定提交的 EvalScope 源码。
+- Docker Engine 和 Docker Compose plugin，用于运行 OpenClaw Gateway/CLI 容器。
+- OpenClaw baseline 或 modified 镜像，需要按第 3 节单独构建。
+
+安装后检查：
+
+```bash
+python -c "import evalscope, agentscope; print('Python dependencies: OK')"
+docker compose version
+```
 
 ## 1. 目标和总体方案
 
@@ -281,17 +309,19 @@ openclaw gateway --allow-unconfigured --bind lan --port 18789
 ### 4.2 启动 baseline Gateway
 
 ```bash
-cd /home/lenovo/code/AIE4902
+cd /path/to/AIE4902
+
+PROJECT_ROOT="$(pwd -P)"
+export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/secrets"
 
 mkdir -p \
-  openclaw_evalscope_cli/.openclaw-eval/state \
-  openclaw_evalscope_cli/.openclaw-eval/secrets
+  "$OPENCLAW_EVAL_STATE_DIR" \
+  "$OPENCLAW_EVAL_SECRET_DIR"
 
 export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
 export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
 export OPENCLAW_GATEWAY_PORT=18789
-export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
-export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
 
 docker compose \
   -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
@@ -340,11 +370,13 @@ OpenClaw 2026.6.11
 modified 和 baseline 必须隔离：
 
 ```bash
+PROJECT_ROOT="$(pwd -P)"
+
 export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
 export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
 export OPENCLAW_GATEWAY_PORT=18790
-export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/state
-export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/secrets
+export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/modified/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/modified/secrets"
 
 mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
 
@@ -472,13 +504,15 @@ source /home/lenovo/code/AIE4902/.venv/bin/activate
 用于验证完整 harness 链路，不消耗真实模型额度：
 
 ```bash
-cd /home/lenovo/code/AIE4902
+cd /path/to/AIE4902
+
+PROJECT_ROOT="$(pwd -P)"
 
 export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
 export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
 export OPENCLAW_GATEWAY_PORT=18789
-export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
-export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
+export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/secrets"
 
 export EVALSCOPE_DATASET=gsm8k
 export EVALSCOPE_LIMIT=1
@@ -517,14 +551,17 @@ source /home/lenovo/code/AIE4902/.venv/bin/activate
 
 python - <<'PY'
 import os
+from pathlib import Path
+
 from aliyuncs import ALIYUNCS_BASE_URL, get_api_key, get_model_name
 from openclaw_evalscope_cli.run_evalscope import main
 
+root = Path.cwd().resolve()
 os.environ.update({
     'OPENCLAW_IMAGE': 'openclaw-baseline:2026.6.11-srcsnap',
     'OPENCLAW_COMPOSE_PROJECT': 'openclaw-eval-baseline',
-    'OPENCLAW_EVAL_STATE_DIR': '/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state',
-    'OPENCLAW_EVAL_SECRET_DIR': '/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets',
+    'OPENCLAW_EVAL_STATE_DIR': str(root / 'openclaw_evalscope_cli/.openclaw-eval/state'),
+    'OPENCLAW_EVAL_SECRET_DIR': str(root / 'openclaw_evalscope_cli/.openclaw-eval/secrets'),
     'OPENCLAW_GATEWAY_PORT': '18789',
     'EVALSCOPE_DATASET': 'gsm8k',
     'EVALSCOPE_LIMIT': '1',
@@ -579,11 +616,13 @@ openclaw-cli-harness exited: sample=0 rc=0 wall=10.8s stdout=21504B stderr=0B ti
 ```bash
 source /home/lenovo/code/AIE4902/.venv/bin/activate
 
+PROJECT_ROOT="$(pwd -P)"
+
 export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
 export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
 export OPENCLAW_GATEWAY_PORT=18789
-export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
-export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
+export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/secrets"
 
 export EVALSCOPE_DATASET=gsm8k
 export EVALSCOPE_LIMIT=5
@@ -607,11 +646,13 @@ python -m openclaw_evalscope_cli.run_evalscope
 ```bash
 source /home/lenovo/code/AIE4902/.venv/bin/activate
 
+PROJECT_ROOT="$(pwd -P)"
+
 export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
 export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
 export OPENCLAW_GATEWAY_PORT=18790
-export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/state
-export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/secrets
+export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/modified/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/modified/secrets"
 
 export EVALSCOPE_DATASET=gsm8k
 export EVALSCOPE_LIMIT=5
@@ -972,3 +1013,129 @@ wc -l "$latest/predictions/openclaw_browsecomp_real_limit2/browsecomp_default.js
 - 第一个样本前 `removed_entries` 或日志计数能体现 marker 被删除。
 - 两个样本都出现 `launching` 和 `exited rc=0`。
 - prediction JSONL 行数为 `2`。
+
+## 12. EvalScope 数据集下载位置与修改方式
+
+### 12.1 默认下载位置
+
+当前 EvalScope 源码中的默认数据集缓存目录由
+`evalscope/evalscope/constants.py` 的 `DEFAULT_DATASET_CACHE_DIR` 定义：
+
+```text
+~/.cache/modelscope/hub/datasets
+```
+
+在当前用户 `lenovo` 下，对应实际路径：
+
+```text
+/home/lenovo/.cache/modelscope/hub/datasets
+```
+
+首次运行某个 benchmark 时，EvalScope 会通过配置的 dataset hub 下载数据并缓存到该目录。后续运行通常会复用缓存。
+
+可以用下面的命令查看当前缓存：
+
+```bash
+du -sh /home/lenovo/.cache/modelscope/hub/datasets
+find /home/lenovo/.cache/modelscope/hub/datasets -mindepth 1 -maxdepth 2 -type d | sort | head -50
+```
+
+### 12.2 使用 EvalScope CLI 修改目录
+
+直接使用 EvalScope CLI 时，通过 `--dataset-dir` 指定数据集目录，通过 `--dataset-hub` 指定下载源：
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+evalscope eval \
+  --model mock \
+  --eval-type mock_llm \
+  --datasets gsm8k \
+  --limit 5 \
+  --dataset-dir /data/evalscope/datasets \
+  --dataset-hub modelscope
+```
+
+如果使用 Hugging Face 数据源，可把 `--dataset-hub` 改为当前 EvalScope 版本支持的 Hugging Face hub 名称。可通过以下命令确认参数选项：
+
+```bash
+evalscope eval --help | grep -A 3 -E "dataset-dir|dataset-hub"
+```
+
+### 12.3 使用 Python 配置修改目录
+
+调用 `run_task()` 时可直接设置：
+
+```python
+from evalscope import run_task
+
+run_task({
+    "model": "mock",
+    "eval_type": "mock_llm",
+    "datasets": ["gsm8k"],
+    "limit": 5,
+    "dataset_dir": "/data/evalscope/datasets",
+    "dataset_hub": "modelscope",
+})
+```
+
+### 12.4 OpenClaw harness 中修改目录
+
+本项目的 `openclaw_evalscope_cli/run_evalscope.py` 已读取以下环境变量：
+
+```bash
+export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_HUB=modelscope
+```
+
+完整运行示例：
+
+```bash
+cd /home/lenovo/code/AIE4902
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+export EVALSCOPE_DATASET=browsecomp
+export EVALSCOPE_LIMIT=2
+export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_HUB=modelscope
+export EVALSCOPE_WORK_DIR=/data/evalscope/outputs/openclaw-browsecomp
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+baseline 和 modified 对比实验应使用相同的 `EVALSCOPE_DATASET_DIR`，保证两组评测读取同一份数据集版本和缓存。
+
+### 12.5 三类目录不要混淆
+
+| 配置 | 用途 | 示例 |
+|---|---|---|
+| `EVALSCOPE_DATASET_DIR` | benchmark 数据集下载和缓存 | `/data/evalscope/datasets` |
+| `EVALSCOPE_WORK_DIR` | EvalScope 日志、预测和报告 | `/data/evalscope/outputs/openclaw-browsecomp` |
+| `OPENCLAW_EVAL_STATE_DIR` | OpenClaw config、session、workspace 等运行状态 | `openclaw_evalscope_cli/.openclaw-eval/state` |
+
+不要把数据集目录放进 `OPENCLAW_EVAL_STATE_DIR`。后者是容器运行状态，可能在重建实验环境时被清理，也可能包含 token、session 和 OpenClaw 自动生成的嵌套 workspace 仓库。
+
+### 12.6 迁移已有缓存
+
+如果服务器已经下载过数据集，可以直接复制缓存，再把 `EVALSCOPE_DATASET_DIR` 指向新位置：
+
+```bash
+sudo mkdir -p /data/evalscope/datasets
+sudo rsync -a --info=progress2 \
+  /home/lenovo/.cache/modelscope/hub/datasets/ \
+  /data/evalscope/datasets/
+sudo chown -R lenovo:lenovo /data/evalscope/datasets
+```
+
+复制完成后先用小样本验证：
+
+```bash
+export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_HUB=modelscope
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=1
+export EVALSCOPE_MODEL=mock
+export EVALSCOPE_EVAL_TYPE=mock_llm
+
+python -m openclaw_evalscope_cli.run_evalscope
+```

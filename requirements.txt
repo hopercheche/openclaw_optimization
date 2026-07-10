@@ -1,0 +1,5 @@
+# EvalScope source revision used by the OpenClaw external-agent runner.
+evalscope @ git+https://github.com/modelscope/evalscope.git@a5be8272e247851ead3dbb3bb230564ae469b30b
+
+# AgentScope-based AliyunCS CLI and the optional FastAPI/Redis service in main.py.
+agentscope[service,storage]==2.0.3
