@@ -1,0 +1,65 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw-baseline:2026.6.11-srcsnap}
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-evalscope-local-token}
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - "${OPENCLAW_EVAL_STATE_DIR:-./.openclaw-eval/state}:/home/node/.openclaw"
+      - "${OPENCLAW_EVAL_SECRET_DIR:-./.openclaw-eval/secrets}:/home/node/.config/openclaw"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    init: true
+    command:
+      [
+        "openclaw",
+        "gateway",
+        "--allow-unconfigured",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-openclaw-baseline:2026.6.11-srcsnap}
+    network_mode: "service:openclaw-gateway"
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-evalscope-local-token}
+      BROWSER: echo
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - "${OPENCLAW_EVAL_STATE_DIR:-./.openclaw-eval/state}:/home/node/.openclaw"
+      - "${OPENCLAW_EVAL_SECRET_DIR:-./.openclaw-eval/secrets}:/home/node/.config/openclaw"
+    init: true
+    entrypoint: ["openclaw"]
+    depends_on:
+      - openclaw-gateway

@@ -1,0 +1,974 @@
+# OpenClaw CLI Harness EvalScope 开发记录
+
+更新时间：2026-07-09
+
+本文记录本项目中 OpenClaw 作为 EvalScope 外部 Agent CLI harness 的接入过程、镜像构建方式、服务启动方式、EvalScope 评测方式、验证结果和踩坑修复。
+
+## 1. 目标和总体方案
+
+目标是评测 OpenClaw 本身的 CLI harness 行为，而不是只测试 OpenClaw Gateway API。
+
+正式评测链路：
+
+```text
+EvalScope
+  -> ExternalAgentConfig(framework="openclaw-cli-harness")
+  -> 自定义 AgentRunner
+  -> openclaw agent --json
+  -> 常驻 OpenClaw Gateway
+  -> EvalScope bridge
+  -> 上游模型 provider
+```
+
+关键点：
+
+- EvalScope 不直接把 `/v1/responses` 当正式评测入口。
+- OpenClaw Gateway 常驻，用于承载 OpenClaw runtime、agent state、workspace、config。
+- 每个样本运行前，runner 临时把 OpenClaw provider 指向 EvalScope bridge。
+- 因为 provider/token 会写入同一个 OpenClaw config volume，v1 默认强制 `eval_batch_size=1`。
+
+## 2. 主要文件
+
+### `openclaw_evalscope_cli/`
+
+新增的 EvalScope harness 包：
+
+- `runner.py`
+  - 注册 `@register_runner("openclaw-cli-harness")`
+  - 实现 EvalScope `AgentRunner` 协议
+  - 调用 `docker compose run openclaw-cli ...`
+  - 每个样本前写入 OpenClaw provider 配置
+
+- `cli.py`
+  - 本地调试包装器
+  - 调用 `openclaw agent --json`
+  - 解析 OpenClaw JSON 输出文本
+
+- `output.py`
+  - 从 OpenClaw JSON 中抽取最终文本
+  - 支持 `payloads[].text`、`result.payloads[].text`、`output_text`、Responses API 风格 `output[].content[].text`
+
+- `run_evalscope.py`
+  - 示例 EvalScope 入口
+  - 构造 `ExternalAgentConfig(framework="openclaw-cli-harness")`
+  - 默认 `mock_llm + gsm8k + limit=1`
+
+- `docker-compose.evalscope.yml`
+  - 定义 `openclaw-gateway` 常驻服务
+  - 定义 `openclaw-cli` 一次性 CLI 服务
+  - 共享 state/config volume
+  - 配置 `host.docker.internal:host-gateway`
+
+- `README.md`
+  - 简要使用说明
+
+### `openclaw-main/`
+
+OpenClaw 源码目录。
+
+本次修改过：
+
+- `Dockerfile`
+  - 配置 npm/pnpm registry mirror
+  - `pnpm install` 加 `--config.minimumReleaseAge=0`
+  - 保持 optional dependencies 启用，避免 native package lockfile 问题
+
+- `DOCKERFILE_BUILD_NOTES.md`
+  - Dockerfile 分阶段解释
+  - 构建问题和修复记录
+
+### 输出记录
+
+- `outputs/openclaw_cli_harness_smoke/`
+  - MockLLM 端到端 smoke
+
+- `outputs/openclaw_cli_config_check/`
+  - OpenClaw CLI target 参数、provider/model 切换检查
+
+- `outputs/openclaw_real_aliyuncs_harness/`
+  - AliyunCS 真实模型评测结果
+  - `REAL_MODEL_REPORT.md`
+
+## 3. OpenClaw 镜像构建
+
+### 3.1 镜像 tag
+
+baseline 镜像：
+
+```text
+openclaw-baseline:2026.6.11-srcsnap
+```
+
+后续修改源码后的实验镜像建议：
+
+```text
+openclaw-modified:<experiment-id>
+```
+
+baseline 和 modified 应使用同一 Dockerfile 构建方式，保证对比变量只来自源码差异。
+
+### 3.2 Dockerfile 结构
+
+`openclaw-main/Dockerfile` 是多阶段构建：
+
+```text
+workspace-deps
+  -> build
+  -> runtime-assets
+  -> base-runtime
+  -> final runtime
+```
+
+各阶段作用：
+
+- `workspace-deps`
+  - 只复制 workspace packages 和 extensions 的 `package.json`
+  - 让 `pnpm install` 缓存尽量不受源码改动影响
+
+- `bun-binary`
+  - 从固定 digest 的 Bun 镜像复制 Bun binary
+  - 避免构建时动态下载 Bun
+
+- `build`
+  - `corepack enable`
+  - `pnpm install --frozen-lockfile`
+  - 构建 OpenClaw server/CLI/UI
+  - 构建可选扩展
+
+- `runtime-assets`
+  - `pnpm prune --prod`
+  - 裁剪构建期文件、`.d.ts`、source map、未使用扩展
+
+- final runtime
+  - 基于 `node:24-bookworm-slim`
+  - 安装运行时工具
+  - 复制 `dist`、`node_modules`、模板、扩展、docs、skills
+  - 创建 `/usr/local/bin/openclaw`
+  - 切换到非 root `node`
+  - 默认启动 `openclaw gateway`
+
+### 3.3 本地 Dockerfile 关键构建修复
+
+为适配当前网络和 pnpm 行为，`openclaw-main/Dockerfile` 中加入：
+
+```dockerfile
+RUN npm config set registry https://registry.npmmirror.com && \
+    pnpm config set registry https://registry.npmmirror.com
+```
+
+依赖安装命令保持：
+
+```dockerfile
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+      --config.minimumReleaseAge=0 \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
+      --config.supportedArchitectures.libc=glibc
+```
+
+说明：
+
+- 保留 `--frozen-lockfile`，保证 baseline 可复现。
+- 加 `--config.minimumReleaseAge=0`，避免 `pnpm-workspace.yaml` 里的 `minimumReleaseAge: 2880` 触发大量 registry metadata/attestation 请求。
+- 不使用 `--no-optional`，因为 `@lydell/node-pty` 依靠 optional native packages 分发平台二进制包。
+
+### 3.4 Docker daemon 代理
+
+构建中遇到 Docker Hub base image 拉取超时。原因是 build args 只影响 Dockerfile 内部步骤，不影响 Docker daemon 拉取 base image metadata/layers。
+
+修复方式是给 Docker daemon 配置代理：
+
+```bash
+sudo install -d /etc/systemd/system/docker.service.d
+
+sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null <<'EOF'
+[Service]
+Environment="HTTP_PROXY=socks5://172.20.64.1:7890"
+Environment="HTTPS_PROXY=socks5://172.20.64.1:7890"
+Environment="ALL_PROXY=socks5://172.20.64.1:7890"
+Environment="NO_PROXY=localhost,127.0.0.1,::1"
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+systemctl show docker --property=Environment --no-pager
+```
+
+### 3.5 构建 baseline 镜像
+
+```bash
+cd /home/lenovo/code/AIE4902
+
+PROXY_HOST="$(ip route show default | awk '{print $3}')"
+export HTTP_PROXY="socks5://$PROXY_HOST:7890"
+export HTTPS_PROXY="socks5://$PROXY_HOST:7890"
+export ALL_PROXY="socks5://$PROXY_HOST:7890"
+export NO_PROXY="localhost,127.0.0.1,::1"
+
+docker build --progress=plain \
+  --build-arg ALL_PROXY="$ALL_PROXY" \
+  --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+  --build-arg HTTP_PROXY="$HTTP_PROXY" \
+  -t openclaw-baseline:2026.6.11-srcsnap \
+  -f openclaw-main/Dockerfile \
+  openclaw-main
+```
+
+验证：
+
+```bash
+docker image inspect openclaw-baseline:2026.6.11-srcsnap --format '{{.Id}} {{.Created}} {{.Size}}'
+docker run --rm openclaw-baseline:2026.6.11-srcsnap openclaw --version
+```
+
+已验证镜像：
+
+```text
+openclaw-baseline:2026.6.11-srcsnap
+OpenClaw 2026.6.11
+```
+
+### 3.6 构建 modified 镜像
+
+修改源码后建议用单独 tag：
+
+```bash
+docker build --progress=plain \
+  --build-arg ALL_PROXY="$ALL_PROXY" \
+  --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+  --build-arg HTTP_PROXY="$HTTP_PROXY" \
+  -t openclaw-modified:<experiment-id> \
+  -f openclaw-main/Dockerfile \
+  openclaw-main
+```
+
+如果 modified 源码放在别的目录，则相应修改 `-f` 和 build context。
+
+## 4. OpenClaw 服务启动
+
+### 4.1 Compose 文件
+
+使用：
+
+```text
+openclaw_evalscope_cli/docker-compose.evalscope.yml
+```
+
+服务：
+
+- `openclaw-gateway`
+  - 常驻 Gateway
+  - 映射宿主端口 `OPENCLAW_GATEWAY_PORT -> 18789`
+  - 默认命令：
+
+```bash
+openclaw gateway --allow-unconfigured --bind lan --port 18789
+```
+
+- `openclaw-cli`
+  - 一次性 CLI service
+  - `network_mode: service:openclaw-gateway`
+  - 共享 Gateway 的网络、state/config volume
+  - `entrypoint: ["openclaw"]`
+
+共享目录：
+
+- `OPENCLAW_EVAL_STATE_DIR -> /home/node/.openclaw`
+- `OPENCLAW_EVAL_SECRET_DIR -> /home/node/.config/openclaw`
+
+### 4.2 启动 baseline Gateway
+
+```bash
+cd /home/lenovo/code/AIE4902
+
+mkdir -p \
+  openclaw_evalscope_cli/.openclaw-eval/state \
+  openclaw_evalscope_cli/.openclaw-eval/secrets
+
+export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
+export OPENCLAW_GATEWAY_PORT=18789
+export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
+export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
+
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -p "$OPENCLAW_COMPOSE_PROJECT" \
+  up -d openclaw-gateway
+```
+
+查看状态：
+
+```bash
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -p openclaw-eval-baseline \
+  ps
+```
+
+健康检查：
+
+```bash
+curl -fsS http://127.0.0.1:18789/healthz
+```
+
+已验证返回：
+
+```json
+{"ok":true,"status":"live"}
+```
+
+### 4.3 CLI 版本检查
+
+```bash
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -p openclaw-eval-baseline \
+  run --rm --no-deps -T openclaw-cli --version
+```
+
+已验证：
+
+```text
+OpenClaw 2026.6.11
+```
+
+### 4.4 modified Gateway 启动建议
+
+modified 和 baseline 必须隔离：
+
+```bash
+export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
+export OPENCLAW_GATEWAY_PORT=18790
+export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/state
+export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/secrets
+
+mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
+
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -p "$OPENCLAW_COMPOSE_PROJECT" \
+  up -d openclaw-gateway
+```
+
+## 5. EvalScope 接入方式
+
+### 5.1 runner 注册
+
+`openclaw_evalscope_cli/runner.py` 注册：
+
+```python
+@register_runner("openclaw-cli-harness")
+class OpenClawCliHarnessRunner(AgentRunner):
+    ...
+```
+
+EvalScope 使用：
+
+```python
+agent_config = {
+    "mode": "external",
+    "framework": "openclaw-cli-harness",
+    "environment": "local",
+    "timeout": 600,
+    "kwargs": {
+        "compose_project": "openclaw-eval-baseline",
+        "gateway_service": "openclaw-gateway",
+        "cli_service": "openclaw-cli",
+        "agent_id": "main",
+        "protocol": "responses",
+    },
+}
+```
+
+### 5.2 runner 的每样本流程
+
+`setup()`：
+
+1. 检查 `docker compose version`
+2. `docker compose up -d openclaw-gateway`
+3. 等待 Gateway `/healthz`
+4. 检查 `openclaw --version`
+
+`run()`：
+
+1. 读取 EvalScope bridge endpoint
+2. 写入 OpenClaw provider：
+
+```text
+models.providers.evalscope.baseUrl = <bridge>/openai/v1
+models.providers.evalscope.apiKey  = <trial token>
+models.providers.evalscope.api     = openai-responses
+models.providers.evalscope.models  = [{"id": "<model_name>", "name": "<model_name>"}]
+```
+
+3. 合并 agent 默认模型 allowlist：
+
+```text
+agents.defaults.models += {"evalscope/<model_name>": {}}
+```
+
+4. 调用：
+
+```bash
+openclaw agent \
+  --agent main \
+  --session-key agent:main:evalscope-<sample-id> \
+  --model evalscope/<model_name> \
+  --message-file <prompt-file> \
+  --json \
+  --timeout <seconds>
+```
+
+5. 从 OpenClaw JSON 输出中抽取最终答案。
+
+### 5.3 关于 `--model evalscope/<model_name>`
+
+OpenClaw 不能凭空调用 `evalscope/<model_name>`。
+
+它需要：
+
+1. `models.providers.evalscope` 中存在该模型。
+2. `agents.defaults.models` 允许 `evalscope/<model_name>`。
+3. `models.providers.evalscope.baseUrl` 指向当前仍在运行的 EvalScope bridge。
+4. `apiKey` 是当前 EvalScope trial token。
+
+正式 EvalScope harness 中，这些配置由 runner 自动写入。手工直接运行 `openclaw agent --model evalscope/deepseek-v3.2` 只有在 EvalScope bridge 正在运行且 token 仍有效时才会成功。
+
+### 5.4 为什么裸 `openclaw agent --message ...` 会失败
+
+曾复现：
+
+```bash
+docker exec openclaw-eval-baseline-openclaw-gateway-1 \
+  openclaw agent --message "who are u"
+```
+
+报错：
+
+```text
+Error: No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>.
+```
+
+原因：OpenClaw CLI 需要目标会话。正确形态必须带：
+
+```bash
+--agent main --session-key agent:main:<some-key>
+```
+
+## 6. 使用 EvalScope 评测
+
+### 6.1 激活虚拟环境
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+```
+
+### 6.2 MockLLM smoke
+
+用于验证完整 harness 链路，不消耗真实模型额度：
+
+```bash
+cd /home/lenovo/code/AIE4902
+
+export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
+export OPENCLAW_GATEWAY_PORT=18789
+export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
+export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
+
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=1
+export EVALSCOPE_EVAL_TYPE=mock_llm
+export EVALSCOPE_MODEL=mock
+export EVALSCOPE_WORK_DIR=outputs/openclaw_cli_harness_smoke
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+已验证链路：
+
+```text
+EvalScope -> openclaw-cli-harness -> openclaw agent --json -> Gateway -> EvalScope bridge -> MockLLM
+```
+
+生成报告示例：
+
+```text
+outputs/openclaw_cli_harness_smoke/20260708_155933/reports/openclaw_cli_harness/gsm8k.json
+outputs/openclaw_cli_harness_smoke/20260708_155933/reports/report.html
+```
+
+### 6.3 真实 AliyunCS 模型 smoke
+
+AliyunCS 配置来自本项目已有 `aliyuncs/` 包：
+
+- 默认模型：`deepseek-v3.2`
+- base URL：`https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
+- API key：通过 `ALIYUNCS_API_KEY` 或 `aliyuncs.get_api_key()` 获取
+
+运行：
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+python - <<'PY'
+import os
+from aliyuncs import ALIYUNCS_BASE_URL, get_api_key, get_model_name
+from openclaw_evalscope_cli.run_evalscope import main
+
+os.environ.update({
+    'OPENCLAW_IMAGE': 'openclaw-baseline:2026.6.11-srcsnap',
+    'OPENCLAW_COMPOSE_PROJECT': 'openclaw-eval-baseline',
+    'OPENCLAW_EVAL_STATE_DIR': '/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state',
+    'OPENCLAW_EVAL_SECRET_DIR': '/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets',
+    'OPENCLAW_GATEWAY_PORT': '18789',
+    'EVALSCOPE_DATASET': 'gsm8k',
+    'EVALSCOPE_LIMIT': '1',
+    'EVALSCOPE_FEW_SHOT_NUM': '0',
+    'EVALSCOPE_MODEL': get_model_name(),
+    'EVALSCOPE_MODEL_ID': 'openclaw_aliyuncs_real_smoke',
+    'EVALSCOPE_EVAL_TYPE': 'openai_api',
+    'EVALSCOPE_API_URL': ALIYUNCS_BASE_URL,
+    'EVALSCOPE_API_KEY': get_api_key(),
+    'EVALSCOPE_TEMPERATURE': '0.0',
+    'EVALSCOPE_MAX_TOKENS': '512',
+    'EVALSCOPE_AGENT_TIMEOUT': '600',
+    'EVALSCOPE_WORK_DIR': 'outputs/openclaw_real_aliyuncs_harness',
+    'EVALSCOPE_JUDGE_STRATEGY': 'rule',
+})
+main()
+PY
+```
+
+已验证结果：
+
+```text
+Model:   openclaw_aliyuncs_real_smoke
+Dataset: gsm8k
+Subset:  main
+Num:     1
+Metric:  mean_acc
+Score:   1.0
+```
+
+报告：
+
+```text
+outputs/openclaw_real_aliyuncs_harness/REAL_MODEL_REPORT.md
+outputs/openclaw_real_aliyuncs_harness/20260708_192356/reports/openclaw_aliyuncs_real_smoke/gsm8k.json
+outputs/openclaw_real_aliyuncs_harness/20260708_192356/reports/report.html
+outputs/openclaw_real_aliyuncs_harness/20260708_192356/predictions/openclaw_aliyuncs_real_smoke/gsm8k_main.jsonl
+```
+
+关键日志：
+
+```text
+openclaw-cli-harness launching: sample=0 model=evalscope/deepseek-v3.2
+bridge[openclaw-cli-harness/4bd635b4] step=0 stream latency=5.32s tokens=21721+168 stop='stop'
+openclaw-cli-harness exited: sample=0 rc=0 wall=10.8s stdout=21504B stderr=0B timed_out=False
+```
+
+### 6.4 正式小样本 baseline
+
+建议先跑 `limit=5`：
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
+export OPENCLAW_GATEWAY_PORT=18789
+export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/state
+export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/openclaw_evalscope_cli/.openclaw-eval/secrets
+
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=5
+export EVALSCOPE_FEW_SHOT_NUM=0
+export EVALSCOPE_MODEL=deepseek-v3.2
+export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
+export EVALSCOPE_EVAL_TYPE=openai_api
+export EVALSCOPE_API_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+export EVALSCOPE_API_KEY="$ALIYUNCS_API_KEY"
+export EVALSCOPE_TEMPERATURE=0.0
+export EVALSCOPE_MAX_TOKENS=512
+export EVALSCOPE_WORK_DIR=outputs/openclaw/baseline
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+注意：不要把真实 API key 写入文档或源码。优先从环境变量或 `.env` 读取。
+
+### 6.5 正式小样本 modified
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
+export OPENCLAW_GATEWAY_PORT=18790
+export OPENCLAW_EVAL_STATE_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/state
+export OPENCLAW_EVAL_SECRET_DIR=/home/lenovo/code/AIE4902/.openclaw-eval/modified/secrets
+
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=5
+export EVALSCOPE_FEW_SHOT_NUM=0
+export EVALSCOPE_MODEL=deepseek-v3.2
+export EVALSCOPE_MODEL_ID=openclaw_modified_deepseek_v32
+export EVALSCOPE_EVAL_TYPE=openai_api
+export EVALSCOPE_API_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+export EVALSCOPE_API_KEY="$ALIYUNCS_API_KEY"
+export EVALSCOPE_TEMPERATURE=0.0
+export EVALSCOPE_MAX_TOKENS=512
+export EVALSCOPE_WORK_DIR=outputs/openclaw/modified
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+## 7. 对比报告
+
+EvalScope 输出通常在：
+
+```text
+<work_dir>/<timestamp>/reports/*.json
+<work_dir>/<timestamp>/reports/report.html
+```
+
+baseline 和 modified 对比时关注：
+
+- `score`
+- `metrics[].score`
+- `num`
+- `predictions/*.jsonl`
+- `reviews/*.jsonl`
+- `logs/eval_log.log`
+
+也可以启动 EvalScope dashboard：
+
+```bash
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+evalscope service --host 0.0.0.0 --port 9000 --outputs outputs
+```
+
+## 8. 已验证项目状态
+
+### 镜像
+
+```text
+openclaw-baseline:2026.6.11-srcsnap
+OpenClaw 2026.6.11
+```
+
+### Gateway
+
+```text
+openclaw-eval-baseline-openclaw-gateway-1
+STATUS: healthy
+PORT: 18789
+```
+
+### MockLLM smoke
+
+```text
+EvalScope -> runner -> OpenClaw CLI -> Gateway -> EvalScope bridge -> MockLLM
+通过
+```
+
+### 模型切换检查
+
+使用：
+
+```text
+EVALSCOPE_MODEL=mock-switch-check
+```
+
+runner 日志显示：
+
+```text
+openclaw-cli-harness launching: sample=0 model=evalscope/mock-switch-check
+```
+
+OpenClaw provider 被写入：
+
+```json
+{
+  "models": [
+    {
+      "id": "mock-switch-check",
+      "name": "mock-switch-check"
+    }
+  ]
+}
+```
+
+### 真实模型 smoke
+
+```text
+Model: deepseek-v3.2
+Dataset: gsm8k
+Limit: 1
+Score: 1.0
+```
+
+## 9. 常见问题
+
+### Docker build 拉镜像慢或超时
+
+build args 不影响 daemon 拉 base image。需要配置 Docker daemon proxy。
+
+### pnpm registry 请求很多且很慢
+
+`minimumReleaseAge` 会触发额外 metadata/attestation 请求。构建时用：
+
+```bash
+--config.minimumReleaseAge=0
+```
+
+### 不要加 `--no-optional`
+
+OpenClaw 依赖 `@lydell/node-pty` 的 optional native packages。禁用 optional 会导致 lockfile/native package 问题。
+
+### 不建议 `pnpm install --no-frozen-lockfile`
+
+baseline 需要可复现。不要为了绕过 lockfile 报错而改依赖图。
+
+### 手工 `openclaw agent --message` 报 No target session
+
+必须指定：
+
+```bash
+--agent main --session-key agent:main:<key>
+```
+
+### 手工 `openclaw agent --model evalscope/...` 报 network error
+
+如果 EvalScope bridge 已退出，OpenClaw provider 里保存的 `host.docker.internal:<port>` 会失效。正式评测时 runner 会为每个样本重写有效 bridge URL 和 token。
+
+## 10. 参考文件
+
+- `openclaw_evalscope_cli/README.md`
+- `openclaw_evalscope_cli/runner.py`
+- `openclaw_evalscope_cli/run_evalscope.py`
+- `openclaw_evalscope_cli/docker-compose.evalscope.yml`
+- `openclaw-main/DOCKERFILE_BUILD_NOTES.md`
+- `outputs/openclaw_cli_config_check/README.md`
+- `outputs/openclaw_real_aliyuncs_harness/REAL_MODEL_REPORT.md`
+
+## 11. Agent Benchmark 验证：非 Harbor 路线
+
+更新时间：2026-07-10
+
+### 11.1 数据集选择
+
+原目标示例是 Terminal-Bench-2.1 前两个任务，但 EvalScope 的 `terminal_bench_v2_1` 依赖 Terminal-Bench/Harbor 运行环境。当前要求是“选取其他不依赖 harbor”，因此改用 EvalScope 内置的 `browsecomp`：
+
+```text
+Dataset: browsecomp
+Tags: Agent, Knowledge, QA
+Adapter: AgentAdapter
+External agent_config: supported
+Harbor: not required
+```
+
+`browsecomp` 是搜索型 agent benchmark，可以通过 `TaskConfig.agent_config` 走 external agent runner，因此适合验证：
+
+```text
+EvalScope -> openclaw-cli-harness runner -> openclaw agent --json -> Gateway -> EvalScope bridge -> upstream model
+```
+
+### 11.2 已观察到的有效链路证据
+
+第一次 `browsecomp limit=2` 运行目录：
+
+```text
+outputs/openclaw_browsecomp_limit2/20260709_235525/
+```
+
+关键证据：
+
+- `logs/eval_log.log` 显示 dataset 成功加载，EvalScope bridge 启动。
+- `logs/eval_log.log` 显示 `openclaw-cli-harness launching: sample=0 model=evalscope/deepseek-v3.2`。
+- `logs/eval_log.log` 显示 bridge 记录了 sample 0 的 17 个模型/tool step，最后 `stop='stop'`。
+- `logs/eval_log.log` 显示 `openclaw-cli-harness exited: sample=0 rc=0`。
+- `predictions/openclaw_browsecomp_real_limit2/browsecomp_default.jsonl` 已生成 1 条预测。
+
+这证明 OpenClaw CLI harness 评测主链路是可执行的。
+
+### 11.3 暴露的问题：workspace 清理过于激进
+
+第一次验证时，为了检查“新 task 前是否清理 workspace”，runner 在样本前清理了 workspace 根目录，只保留 `.git`：
+
+```text
+openclaw-cli-harness workspace cleanup: sample=0 path=/home/node/.openclaw/workspace before=10 after=1 preserve_git=True
+```
+
+这会删除 OpenClaw 自己的 workspace seed/context 文件：
+
+```text
+AGENTS.md
+SOUL.md
+TOOLS.md
+IDENTITY.md
+USER.md
+HEARTBEAT.md
+openclaw-workspace-state.json
+```
+
+OpenClaw 对 workspace 有 attestation 保护。被 attested 的 workspace 如果被擦空，后续启动会拒绝自动重新 seed，报错：
+
+```text
+WorkspaceVanishedError:
+OpenClaw workspace appears to have disappeared after a recent initialization.
+Refusing to reseed BOOTSTRAP.md over a recently attested workspace.
+```
+
+结论：不能把 OpenClaw workspace 根 seed 文件视为评测脏状态。
+
+### 11.4 已修复的清理策略
+
+`openclaw_evalscope_cli/runner.py` 已改为 allowlist 清理：
+
+默认保留：
+
+```text
+.git
+.agents
+skills
+memory
+AGENTS.md
+SOUL.md
+TOOLS.md
+IDENTITY.md
+USER.md
+HEARTBEAT.md
+BOOTSTRAP.md
+MEMORY.md
+openclaw-workspace-state.json
+```
+
+只删除不在 allowlist 中的评测残留文件，例如手工放入的 marker、任务生成的临时文件等。
+
+新日志格式：
+
+```text
+openclaw-cli-harness workspace cleanup: sample=<id> path=<workspace> before=<n> after=<n> removed=<n> preserved=<n>
+```
+
+runner 也会把清理结果写进 `AgentRunResult.metrics.workspace_cleanup`：
+
+```json
+{
+  "enabled": true,
+  "workspace": "/home/node/.openclaw/workspace",
+  "entries_before": 9,
+  "entries_after": 8,
+  "removed_count": 1,
+  "removed_entries": ["__stale_marker_before_browsecomp.txt"],
+  "preserved_entries": ["AGENTS.md", "..."]
+}
+```
+
+`openclaw_evalscope_cli/run_evalscope.py` 新增环境变量：
+
+```bash
+export OPENCLAW_CLEAN_WORKSPACE=true
+export OPENCLAW_WORKSPACE_PATH=/home/node/.openclaw/workspace
+export OPENCLAW_PRESERVE_WORKSPACE_GIT=true
+export OPENCLAW_WORKSPACE_PRESERVE_EXTRA_ENTRIES="my-required-file"
+```
+
+多个 extra entries 用 `:` 分隔。
+
+### 11.5 当前 state 恢复
+
+由于旧清理已经把当前 baseline bind mount 的 workspace seed 文件删除，已从 `openclaw-main/docs/reference/templates/` 恢复到：
+
+```text
+openclaw_evalscope_cli/.openclaw-eval/state/workspace/
+```
+
+当前已恢复：
+
+```text
+.git
+AGENTS.md
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
+openclaw-workspace-state.json
+```
+
+### 11.6 推荐重跑命令
+
+受当前执行环境限制，Codex 会话无法访问 Docker socket；下面命令需要在你的 shell 中运行。
+
+先放入一个 marker，用于验证样本前清理会删除评测残留，但保留 OpenClaw seed 文件：
+
+```bash
+docker exec openclaw-eval-baseline-openclaw-gateway-1 sh -lc '
+  mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+  echo stale > "$OPENCLAW_WORKSPACE_DIR/__stale_marker_before_browsecomp.txt"
+  find "$OPENCLAW_WORKSPACE_DIR" -mindepth 1 -maxdepth 1 -printf "%f\n" | sort
+'
+```
+
+然后运行 `browsecomp` 前两个样本：
+
+```bash
+cd /home/lenovo/code/AIE4902
+source /home/lenovo/code/AIE4902/.venv/bin/activate
+
+python - <<'PY'
+import os
+from pathlib import Path
+
+from aliyuncs import ALIYUNCS_BASE_URL, get_api_key, get_model_name
+
+root = Path('/home/lenovo/code/AIE4902')
+os.environ.update({
+    'OPENCLAW_IMAGE': 'openclaw-baseline:2026.6.11-srcsnap',
+    'OPENCLAW_COMPOSE_PROJECT': 'openclaw-eval-baseline',
+    'OPENCLAW_GATEWAY_PORT': '18789',
+    'OPENCLAW_EVAL_STATE_DIR': str(root / 'openclaw_evalscope_cli/.openclaw-eval/state'),
+    'OPENCLAW_EVAL_SECRET_DIR': str(root / 'openclaw_evalscope_cli/.openclaw-eval/secrets'),
+    'OPENCLAW_CLEAN_WORKSPACE': 'true',
+    'OPENCLAW_PRESERVE_WORKSPACE_GIT': 'true',
+    'EVALSCOPE_DATASET': 'browsecomp',
+    'EVALSCOPE_LIMIT': '2',
+    'EVALSCOPE_MODEL': get_model_name(),
+    'EVALSCOPE_MODEL_ID': 'openclaw_browsecomp_real_limit2',
+    'EVALSCOPE_EVAL_TYPE': 'openai_api',
+    'EVALSCOPE_API_URL': ALIYUNCS_BASE_URL,
+    'EVALSCOPE_API_KEY': get_api_key(),
+    'EVALSCOPE_FEW_SHOT_NUM': '0',
+    'EVALSCOPE_TEMPERATURE': '0.0',
+    'EVALSCOPE_MAX_TOKENS': '2048',
+    'EVALSCOPE_AGENT_TIMEOUT': '900',
+    'EVALSCOPE_WORK_DIR': str(root / 'outputs/openclaw_browsecomp_limit2'),
+    'EVALSCOPE_JUDGE_STRATEGY': 'rule',
+})
+
+from openclaw_evalscope_cli.run_evalscope import main
+main()
+PY
+```
+
+重跑后检查日志：
+
+```bash
+latest="$(ls -dt outputs/openclaw_browsecomp_limit2/* | head -1)"
+grep -E "workspace cleanup|launching: sample=|exited: sample=|bridge\\[openclaw-cli-harness" "$latest/logs/eval_log.log"
+wc -l "$latest/predictions/openclaw_browsecomp_real_limit2/browsecomp_default.jsonl"
+```
+
+期望：
+
+- 日志里出现新格式 `removed=<n> preserved=<n>`。
+- 第一个样本前 `removed_entries` 或日志计数能体现 marker 被删除。
+- 两个样本都出现 `launching` 和 `exited rc=0`。
+- prediction JSONL 行数为 `2`。

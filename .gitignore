@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+outputs/
+evalscope/
+openclaw-main/
+
+# Local archives and downloaded source snapshots
+*.zip
+
+# EvalScope/OpenClaw runtime state created by docker-compose volumes.
+# This includes OpenClaw's own nested workspace git repo and secrets/config.
+.openclaw-eval/
+openclaw_evalscope_cli/.openclaw-eval/
+
+# Docker image archives
+*.tar
+*.tar.gz
+*.tgz
+*.tar.zst
+*.tar.xz

@@ -1,0 +1,108 @@
+---
+name: agentscope
+description: Use when working with agentscope
+---
+
+# Agentscope Skill
+
+Use when working with agentscope
+
+## When to Use This Skill
+
+Use this skill when you need to:
+- understand agentscope features, APIs, and workflows
+- find concrete code examples before implementing or debugging
+- navigate the official documentation quickly through categorized references
+
+## Quick Reference
+
+### High-Signal Examples
+
+**Example 1** (python):
+```python
+import asyncio
+from agentscope.message import UserMsg
+
+async def main():
+    msg = UserMsg(name="user", content="What files are in the current directory?")
+    result = await agent.reply(msg)
+    print(result.get_text_content())
+
+asyncio.run(main())
+```
+
+**Example 2** (python):
+```python
+async def main():
+    msg = UserMsg(name="user", content="Summarize the README.")
+    async for event in agent.reply_stream(msg):
+        if hasattr(event, "delta"):
+            print(event.delta, end="", flush=True)
+
+asyncio.run(main())
+```
+
+**Example 3** (typescript):
+```typescript
+<<<TRUNCATED>>>
+<system-reminder>The remaining content has been omitted for limited context.</system-reminder>
+```
+
+**Example 4** (typescript):
+```typescript
+<<<TRUNCATED>>>
+<system-reminder>The remaining content has been omitted for limited context. You can refer to the file in '/path/to/tool_result-<id>.txt' for the truncated content if needed.</system-reminder>
+```
+
+**Example 5** (dart):
+```dart
+await agent.observe(other_agent_msg)
+```
+
+### Key Usage Notes
+
+**Pattern 1:** On this pageOverviewChat ModelCreate Chat ModelCall Chat ModelGenerate Structured OutputFormatterCustom ProviderStep 1: Define the CredentialStep 2...
+
+```
+import os
+from agentscope.model import DashScopeChatModel
+from agentscope.credential import DashScopeCredential
+
+model = DashScopeChatModel(
+    credential=DashScopeCredential(api_key=os.environ["DASHSCOPE_API_KEY"]),
+    model="qwen-plus",
+    stream=True,
+)
+```
+
+## Reference Files
+
+This skill includes comprehensive documentation in `references/`:
+
+- **versions.md** - Versions documentation
+
+Use `view` to read specific reference files when detailed information is needed.
+
+## Working with This Skill
+
+### Start Here
+Start with the getting_started or tutorials reference files for foundational concepts.
+
+### For Specific Features
+Use the appropriate category reference file (api, guides, etc.) for detailed information.
+
+### For Code Examples
+Use the high-signal examples above first, then open the matching reference file for full context.
+
+## Notes
+
+- This skill was automatically generated from official documentation
+- Reference files preserve the structure and examples from source docs
+- Code examples include language detection for better syntax highlighting
+- Quick reference entries are filtered to avoid low-signal placeholders and inline tokens
+
+## Updating
+
+To refresh this skill with updated documentation:
+1. Re-run the scraper with the same configuration
+2. The skill will be rebuilt with the latest information
