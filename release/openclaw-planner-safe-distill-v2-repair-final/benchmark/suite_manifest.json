@@ -1,0 +1,19 @@
+{
+  "source_path": "benchmarks/tasks/061_safe_generalization_distill_v2_suite.json",
+  "source_sha256": "e49bbf3b1c90b72a779aa90a7dd18d4f0c1ddb11d8f954e8c765e1694448105d",
+  "task_count": 1000,
+  "split_counts": {
+    "dev": 800,
+    "holdout": 200
+  },
+  "source_counts": {
+    "phoneharness": 144,
+    "phoneharness_synthetic": 250,
+    "skillsbench": 11,
+    "tau2": 184,
+    "terminalworld_safe_network": 311,
+    "toolbench": 100
+  },
+  "raw_prompts_packaged": false,
+  "omission_reason": "Upstream synthetic benchmark tasks contain credential-shaped fixtures; the release retains only aggregate metadata and the source SHA-256."
+}

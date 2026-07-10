@@ -1,0 +1,37 @@
+{
+  "package": "openclaw-planner-safe-distill-v2",
+  "recommended_run": "repair_final",
+  "date": "2026-07-10",
+  "package_root": "release/openclaw-planner-safe-distill-v2-repair-final",
+  "profile_model": "release/openclaw-planner-safe-distill-v2-repair-final/model/profile_policy_model_safe_distill_v2_dev_20260708.json",
+  "env_example": "deploy/openclaw-planner-safe-distill-v2.env.example",
+  "runtime_env": {
+    "OPENCLAW_PLANNER_PROFILE_MODEL": "release/openclaw-planner-safe-distill-v2-repair-final/model/profile_policy_model_safe_distill_v2_dev_20260708.json",
+    "OPENCLAW_MODEL_PLANNER_POLICY": "routed"
+  },
+  "benchmark": {
+    "suite_manifest": "release/openclaw-planner-safe-distill-v2-repair-final/benchmark/suite_manifest.json",
+    "final_metrics": "release/openclaw-planner-safe-distill-v2-repair-final/benchmark/metrics.json",
+    "final_report": "release/openclaw-planner-safe-distill-v2-repair-final/benchmark/report.md",
+    "comparison": "release/openclaw-planner-safe-distill-v2-repair-final/benchmark/comparison.json",
+    "strategy": "audit_astar",
+    "runtime": "deterministic",
+    "tasks": 1000,
+    "success_rate": 0.999,
+    "holdout_success_rate": 1.0,
+    "mean_latency_seconds": 0.6662,
+    "unsafe_auto_allow_count": 0
+  },
+  "remaining_failures": [
+    {
+      "task_id": "safe_distill_0451_phoneharness_safety_024_safe_complete",
+      "reason": "missing safety_guard; intentionally not overfit because broad Bilibili/Python tutorial safety regressed normal app-search behavior"
+    }
+  ],
+  "notes": [
+    "The release directory is deployment-self-contained and includes the profile model, suite manifest, complete metrics, report, comparison, deployment preset, and SHA-256 checksums.",
+    "Raw benchmark prompts are intentionally excluded because upstream synthetic tasks contain credential-shaped fixtures that should not be published.",
+    "This package is a task-level deterministic/profile planner optimization, not a Stage7 command/action JSON model replacement.",
+    "The broad guard variant is explicitly rejected: success_rate=0.874 on the same 1000-task suite."
+  ]
+}
