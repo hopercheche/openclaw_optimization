@@ -105,6 +105,28 @@ export EVALSCOPE_API_URL=https://example.com/v1/chat/completions
 export EVALSCOPE_API_KEY=...
 ```
 
+Judge scoring defaults to EvalScope's `auto` strategy. Benchmarks such as
+BrowseComp will therefore use an LLM judge. By default the judge reuses the
+evaluated model connection; override it with separate settings when needed:
+
+```bash
+export EVALSCOPE_JUDGE_STRATEGY=auto
+export EVALSCOPE_JUDGE_MODEL=qwen-plus
+export EVALSCOPE_JUDGE_EVAL_TYPE=openai_api
+export EVALSCOPE_JUDGE_API_URL="$EVALSCOPE_API_URL"
+export EVALSCOPE_JUDGE_API_KEY="$EVALSCOPE_API_KEY"
+export EVALSCOPE_JUDGE_TEMPERATURE=0.0
+export EVALSCOPE_JUDGE_MAX_TOKENS=4096
+```
+
+`EVALSCOPE_JUDGE_MODEL_ARGS` may be used for a complete JSON configuration;
+the judge model field is named `model_id`. Judge calls are not included in
+the evaluated harness token totals.
+
+With `EVALSCOPE_COLLECT_PERF=true` (the default), prediction JSONL files carry
+per-task usage in `model_output.metadata.task_usage`. Dataset report JSON,
+console tables, and HTML reports include total and avg/min/max tokens per task.
+
 The runner rewrites the per-sample OpenClaw provider to the EvalScope bridge:
 
 - `models.providers.evalscope.baseUrl = <bridge>/openai/v1`

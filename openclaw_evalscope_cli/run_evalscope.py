@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,21 @@ def _env_list(name: str) -> list[str]:
     return [part for part in raw.split(os.pathsep) if part]
 
 
+def _env_json_object(name: str) -> dict[str, Any] | None:
+    raw = os.getenv(name)
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be a valid JSON object: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must decode to a JSON object")
+    if "model" in value and "model_id" not in value:
+        raise ValueError(f'{name} uses "model_id", not "model", for the judge model name')
+    return value
+
+
 def _default_compose_files() -> list[str]:
     raw = _env_list("OPENCLAW_COMPOSE_FILES")
     if raw:
@@ -63,6 +79,25 @@ def build_task_config() -> dict[str, Any]:
     dataset = os.getenv("EVALSCOPE_DATASET", "gsm8k")
     model_name = os.getenv("EVALSCOPE_MODEL", "mock")
     eval_type = os.getenv("EVALSCOPE_EVAL_TYPE", "mock_llm")
+    api_url = os.getenv("EVALSCOPE_API_URL")
+    api_key = os.getenv("EVALSCOPE_API_KEY")
+
+    judge_model_args = _env_json_object("EVALSCOPE_JUDGE_MODEL_ARGS")
+    if judge_model_args is None:
+        judge_model_args = {
+            "model_id": os.getenv("EVALSCOPE_JUDGE_MODEL", model_name),
+            "eval_type": os.getenv("EVALSCOPE_JUDGE_EVAL_TYPE", eval_type),
+            "generation_config": {
+                "temperature": _env_float("EVALSCOPE_JUDGE_TEMPERATURE", 0.0),
+                "max_tokens": _env_int("EVALSCOPE_JUDGE_MAX_TOKENS", 4096),
+            },
+        }
+        judge_api_url = os.getenv("EVALSCOPE_JUDGE_API_URL") or api_url
+        judge_api_key = os.getenv("EVALSCOPE_JUDGE_API_KEY") or api_key
+        if judge_api_url:
+            judge_model_args["api_url"] = judge_api_url
+        if judge_api_key:
+            judge_model_args["api_key"] = judge_api_key
 
     cfg: dict[str, Any] = {
         "model": model_name,
@@ -106,14 +141,14 @@ def build_task_config() -> dict[str, Any]:
                 "workspace_clean_timeout_s": _env_float("OPENCLAW_WORKSPACE_CLEAN_TIMEOUT", 60.0),
             },
         },
-        "judge_strategy": os.getenv("EVALSCOPE_JUDGE_STRATEGY", "rule"),
-        "collect_perf": True,
+        "judge_strategy": os.getenv("EVALSCOPE_JUDGE_STRATEGY", "auto"),
+        "judge_model_args": judge_model_args,
+        "analysis_report": _env_bool("EVALSCOPE_ANALYSIS_REPORT", False),
+        "collect_perf": _env_bool("EVALSCOPE_COLLECT_PERF", True),
         "work_dir": os.getenv("EVALSCOPE_WORK_DIR", "outputs/openclaw_cli_harness"),
         "debug": _env_bool("EVALSCOPE_DEBUG", False),
     }
 
-    api_url = os.getenv("EVALSCOPE_API_URL")
-    api_key = os.getenv("EVALSCOPE_API_KEY")
     dataset_dir = os.getenv("EVALSCOPE_DATASET_DIR")
     dataset_hub = os.getenv("EVALSCOPE_DATASET_HUB")
     if api_url:

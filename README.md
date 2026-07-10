@@ -970,7 +970,7 @@ from pathlib import Path
 
 from aliyuncs import ALIYUNCS_BASE_URL, get_api_key, get_model_name
 
-root = Path('/home/lenovo/code/AIE4902')
+root = Path.cwd().resolve()
 os.environ.update({
     'OPENCLAW_IMAGE': 'openclaw-baseline:2026.6.11-srcsnap',
     'OPENCLAW_COMPOSE_PROJECT': 'openclaw-eval-baseline',
@@ -991,7 +991,7 @@ os.environ.update({
     'EVALSCOPE_MAX_TOKENS': '2048',
     'EVALSCOPE_AGENT_TIMEOUT': '900',
     'EVALSCOPE_WORK_DIR': str(root / 'outputs/openclaw_browsecomp_limit2'),
-    'EVALSCOPE_JUDGE_STRATEGY': 'rule',
+    'EVALSCOPE_JUDGE_STRATEGY': 'auto',
 })
 
 from openclaw_evalscope_cli.run_evalscope import main
@@ -1138,4 +1138,144 @@ export EVALSCOPE_MODEL=mock
 export EVALSCOPE_EVAL_TYPE=mock_llm
 
 python -m openclaw_evalscope_cli.run_evalscope
+```
+
+## 13. LLM Judge、自定义评分指标与 Token 指标
+
+### 13.1 EvalScope 什么时候调用 LLM Judge
+
+Judge 的主配置在 `TaskConfig.judge_strategy` 和 `TaskConfig.judge_model_args`：
+
+| `judge_strategy` | 行为 |
+|---|---|
+| `rule` | 只使用规则指标，不调用 Judge 模型 |
+| `llm` | 每个样本都使用 Judge 模型评分 |
+| `llm_recall` | 先做规则评分，规则结果未达到满分时再调用 Judge |
+| `auto` | 由 benchmark adapter 决定；例如 BrowseComp 默认启用 LLM Judge |
+
+`analysis_report=true` 是另一条独立的 LLM 调用路径：它使用 Judge 模型生成报告分析，即使评分策略是 `rule` 也可能产生模型调用。
+
+本项目的 OpenClaw 入口默认使用 `auto`。未提供单独 Judge 配置时，会复用当前被评测模型的 model、API URL、API key 和 eval type：
+
+```bash
+export EVALSCOPE_JUDGE_STRATEGY=auto
+```
+
+需要使用独立 Judge 模型时，可以按字段配置：
+
+```bash
+export EVALSCOPE_JUDGE_MODEL=deepseek-v3.2
+export EVALSCOPE_JUDGE_EVAL_TYPE=openai_api
+export EVALSCOPE_JUDGE_API_URL="$EVALSCOPE_API_URL"
+export EVALSCOPE_JUDGE_API_KEY="$EVALSCOPE_API_KEY"
+export EVALSCOPE_JUDGE_TEMPERATURE=0.0
+export EVALSCOPE_JUDGE_MAX_TOKENS=4096
+```
+
+也可以一次传入完整 JSON。注意 Judge 模型字段名是 `model_id`，不是 `model`：
+
+```bash
+export EVALSCOPE_JUDGE_MODEL_ARGS='{
+  "model_id": "deepseek-v3.2",
+  "eval_type": "openai_api",
+  "api_url": "https://example.com/v1/chat/completions",
+  "api_key": "...",
+  "generation_config": {"temperature": 0.0, "max_tokens": 4096}
+}'
+```
+
+API key 应通过环境变量或 `.env` 提供，不要写入源码、README 或镜像层。
+
+### 13.2 自定义评分指标
+
+普通评分指标作用于单个样本的 `prediction` 和 `reference`，通过 `@register_metric` 注册：
+
+```python
+from evalscope.api.metric import Metric
+from evalscope.api.registry import register_metric
+
+
+@register_metric("answer_length_ratio")
+class AnswerLengthRatio(Metric):
+    def apply(self, predictions: list[str], references: list[str]) -> list[float]:
+        scores = []
+        for prediction, reference in zip(predictions, references):
+            denominator = max(1, len(reference))
+            scores.append(min(1.0, len(prediction) / denominator))
+        return scores
+```
+
+注册模块必须在创建 benchmark 之前被导入，并由自定义 benchmark 的 `metric_list` 引用 `answer_length_ratio`。这类 metric 用于答案质量，不适合统计 token、延迟等运行数据，因为 `Metric.apply()` 不接收 `TaskState` 或模型 usage。
+
+### 13.3 任务级 Token 指标
+
+项目中的 token 指标通过 EvalScope performance collector 采集，不计入 LLM Judge 和 `analysis_report` 的消耗。
+
+对 OpenClaw CLI harness，一个 benchmark 样本可能包含多次模型调用。EvalScope 会先把该样本所有 bridge 调用的 input/output token 求和，得到任务级用量，再在数据集级汇总：
+
+```text
+Total Tok
+Avg Tok/Task
+Min Tok/Task
+Max Tok/Task
+```
+
+结果位置：
+
+- 每任务：`predictions/...jsonl` 的 `model_output.metadata.task_usage`。
+- 数据集汇总：`reports/<model>/<dataset>.json` 的 `perf_metrics.summary.task_usage`。
+- 展示：单数据集控制台表、Overall report table 和 `report.html`。
+
+JSON 中同时保留 input/output/total 的详细统计，控制台和 HTML 只显示上述四个紧凑列。provider 未返回 usage 或使用不含 usage 的旧缓存时显示 `-`，不会错误记为 0。
+
+可以关闭采集：
+
+```bash
+export EVALSCOPE_COLLECT_PERF=false
+```
+
+### 13.4 EvalScope fork 与依赖锁定
+
+任务级 token 指标实现在 EvalScope fork 的以下分支和提交中：
+
+```text
+Repository: https://github.com/Asuna-L/evalscope
+Branch: feature/task-token-metrics
+Commit: cd25a08ec54bde5b4b895d43324a022e54c958b1
+```
+
+根目录 `requirements.txt` 已锁定该 commit。推送本地分支后，服务器执行以下命令即可安装相同版本：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### 13.5 使用 `run.py` 验证新指标
+
+根目录 `run.py` 是当前 OpenClaw BrowseComp 测试入口，默认配置为：
+
+- baseline 镜像 `openclaw-baseline:2026.6.11-srcsnap`
+- `browsecomp --limit 2`
+- `judge_strategy=auto`，Judge 默认复用被评测模型
+- `collect_perf=true`，生成任务级 token 和数据集汇总列
+- 输出到 `outputs/openclaw_browsecomp_token_metrics/`
+
+运行前确保 `.env` 或环境变量中存在 `ALIYUNCS_API_KEY`：
+
+```bash
+cd /path/to/AIE4902
+source .venv/bin/activate
+python run.py
+```
+
+脚本使用 `setdefault` 设置测试默认值，所以可以从 shell 覆盖模型、数据集、limit、Judge 或镜像，无需修改文件。例如：
+
+```bash
+export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
+export OPENCLAW_GATEWAY_PORT=18790
+export EVALSCOPE_MODEL_ID=openclaw_modified_deepseek_v32
+export EVALSCOPE_LIMIT=5
+
+python run.py
 ```
