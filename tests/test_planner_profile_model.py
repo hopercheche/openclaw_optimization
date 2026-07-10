@@ -93,6 +93,48 @@ class PlannerProfileModelTest(unittest.TestCase):
                 prediction = predict_goal_profile("Resolve a customer request with the support API tool.")
             self.assertEqual(prediction.execution_tools, ["mcp_tool_runner"])
 
+    def test_terminal_model_env_only_routes_terminal_goals(self) -> None:
+        default_examples = [
+            PlannerProfileExample(
+                goal="Use the support API tool to resolve a customer request.",
+                planner_profile="api_planning",
+                execution_tools=["mcp_tool_runner"],
+                policy_mode="act",
+                source_family="toolbench",
+            ),
+        ]
+        terminal_examples = [
+            PlannerProfileExample(
+                goal="TerminalWorld verified terminal task. Run a command and save output to /app/result.txt.",
+                planner_profile="terminal_cli_workflow",
+                execution_tools=["command_runner"],
+                policy_mode="act",
+                source_family="terminal_template",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            default_path = Path(temp_dir) / "default_profile.json"
+            terminal_path = Path(temp_dir) / "terminal_profile.json"
+            save_profile_model(train_profile_model(default_examples), default_path)
+            save_profile_model(train_profile_model(terminal_examples), terminal_path)
+            with patch.dict(
+                "os.environ",
+                {
+                    "OPENCLAW_PLANNER_PROFILE_MODEL": str(default_path),
+                    "OPENCLAW_TERMINAL_PLANNER_PROFILE_MODEL": str(terminal_path),
+                },
+                clear=False,
+            ):
+                clear_profile_model_cache()
+                terminal_prediction = predict_goal_profile(
+                    "TerminalWorld verified terminal task. Plan a safe command and write /app/result.txt."
+                )
+                api_prediction = predict_goal_profile("Resolve a customer request with the support API tool.")
+            self.assertEqual(terminal_prediction.execution_tools, ["command_runner"])
+            self.assertEqual(terminal_prediction.model_path, str(terminal_path))
+            self.assertEqual(api_prediction.execution_tools, ["mcp_tool_runner"])
+            self.assertEqual(api_prediction.model_path, str(default_path))
+
 
 if __name__ == "__main__":
     unittest.main()

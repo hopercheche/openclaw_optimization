@@ -15,6 +15,7 @@ from typing import Any, Iterable
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "data" / "planner_models" / "profile_policy_model.json"
 MODEL_ENV_VAR = "OPENCLAW_PLANNER_PROFILE_MODEL"
+TERMINAL_MODEL_ENV_VAR = "OPENCLAW_TERMINAL_PLANNER_PROFILE_MODEL"
 DISABLE_ENV_VAR = "OPENCLAW_DISABLE_PLANNER_PROFILE_MODEL"
 
 EXECUTION_TOOL_ORDER = [
@@ -72,6 +73,7 @@ def train_profile_model(
     examples: Iterable[PlannerProfileExample],
     *,
     strip_hints: bool = True,
+    balanced_prior: bool = False,
 ) -> dict[str, Any]:
     rows = list(examples)
     if not rows:
@@ -93,12 +95,13 @@ def train_profile_model(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_type": "multinomial_naive_bayes_profile_policy",
         "strip_profile_hints": strip_hints,
+        "balanced_prior": balanced_prior,
         "example_count": len(training_rows),
         "execution_tool_order": EXECUTION_TOOL_ORDER,
         "models": {
-            "planner_profile": _train_label_model(training_rows, "planner_profile"),
-            "execution_tools": _train_label_model(training_rows, "execution_tools"),
-            "policy_mode": _train_label_model(training_rows, "policy_mode"),
+            "planner_profile": _train_label_model(training_rows, "planner_profile", balanced_prior=balanced_prior),
+            "execution_tools": _train_label_model(training_rows, "execution_tools", balanced_prior=balanced_prior),
+            "policy_mode": _train_label_model(training_rows, "policy_mode", balanced_prior=balanced_prior),
         },
     }
 
@@ -126,7 +129,8 @@ def predict_goal_profile(
     *,
     model_path: Path | None = None,
 ) -> ProfilePrediction:
-    model = load_profile_model(model_path) if model_path else _cached_model(str(_configured_model_path()))
+    selected_model_path = model_path or _configured_model_path_for_goal(goal)
+    model = load_profile_model(selected_model_path) if model_path else _cached_model(str(selected_model_path))
     if not model:
         return ProfilePrediction(execution_tools=[])
 
@@ -141,7 +145,7 @@ def predict_goal_profile(
         profile_confidence=profile_confidence,
         tools_confidence=tools_confidence,
         policy_confidence=policy_confidence,
-        model_path=str(model_path or _configured_model_path()),
+        model_path=str(selected_model_path),
     )
 
 
@@ -213,6 +217,25 @@ def _cached_model(path: str) -> dict[str, Any] | None:
 
 def _configured_model_path() -> Path:
     return Path(os.getenv(MODEL_ENV_VAR, str(DEFAULT_MODEL_PATH))).expanduser()
+
+
+def _configured_model_path_for_goal(goal: str) -> Path:
+    terminal_model = os.getenv(TERMINAL_MODEL_ENV_VAR)
+    if terminal_model and _looks_like_terminal_cli_goal(goal):
+        terminal_path = Path(terminal_model).expanduser()
+        if terminal_path.exists():
+            return terminal_path
+    return _configured_model_path()
+
+
+def _looks_like_terminal_cli_goal(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(marker in lower_goal for marker in [
+        "terminalworld verified terminal task",
+        "terminalworld style cli task",
+        "verified terminal benchmark task",
+        "/app/result.txt",
+    ])
 
 
 def _train_label_model(rows: list[dict[str, str]], label_key: str, balanced_prior: bool = False) -> dict[str, Any]:

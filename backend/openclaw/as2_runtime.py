@@ -300,6 +300,7 @@ def generate_as2_openai_plan(
 ) -> AS2PlanResult:
     provider_config = resolve_model_provider_config()
     timeout_seconds = float(os.getenv("OPENCLAW_MODEL_TIMEOUT_SECONDS", "45"))
+    max_tokens = int(os.getenv("OPENCLAW_MODEL_MAX_TOKENS", "2000"))
     architecture = describe_as2_architecture(workspace_path, permission_mode)
     if not provider_config.api_key:
         return AS2PlanResult(
@@ -317,6 +318,7 @@ def generate_as2_openai_plan(
                     permission_mode,
                     provider_config,
                     timeout_seconds,
+                    max_tokens,
                     workspace_path,
                     run_id,
                     architecture,
@@ -338,6 +340,7 @@ async def _generate(
     permission_mode: str,
     provider_config: ModelProviderConfig,
     timeout_seconds: float,
+    max_tokens: int,
     workspace_path: str | None,
     run_id: str | None,
     architecture: dict[str, Any],
@@ -365,7 +368,10 @@ async def _generate(
         f"{', '.join(sorted(ALLOWED_TOOLS))}. Score each candidate using "
         "integers 1-5 for impact, evidence_value, reversibility, and risk. "
         "Use mutates_workspace=true only when the action would write files, run "
-        "commands, deploy, or affect external state."
+        "commands, deploy, or affect external state. Return compact JSON with "
+        "short strings only. Include at least goal_analyzer, planner, risk_model, "
+        "and verifier candidates, plus the most relevant workspace or execution "
+        "tool. Do not explain outside the JSON object."
     )
     user_prompt = {
         "goal": goal,
@@ -394,24 +400,34 @@ async def _generate(
     text_parts: list[str] = []
     try:
         workspace = workspace_path or os.getcwd()
+        model_kwargs = {
+            "credential": OpenAICredential(
+                api_key=provider_config.api_key,
+                base_url=provider_config.base_url,
+            ),
+            "model": provider_config.model,
+            "parameters": OpenAIChatModel.Parameters(
+                max_tokens=max_tokens,
+                thinking_enable=False,
+                reasoning_effort="none",
+                temperature=0,
+            ),
+            "stream": True,
+            "client_kwargs": {"timeout": timeout_seconds},
+        }
+        try:
+            chat_model = OpenAIChatModel(
+                **model_kwargs,
+                extra_body={"enable_thinking": False},
+            )
+        except TypeError as exc:
+            if "extra_body" not in str(exc):
+                raise
+            chat_model = OpenAIChatModel(**model_kwargs)
         agent = Agent(
             name="OpenClawPlanner",
             system_prompt=system_prompt,
-            model=OpenAIChatModel(
-                credential=OpenAICredential(
-                    api_key=provider_config.api_key,
-                    base_url=provider_config.base_url,
-                ),
-                model=provider_config.model,
-                parameters=OpenAIChatModel.Parameters(
-                    max_tokens=2000,
-                    thinking_enable=False,
-                    reasoning_effort="none",
-                    temperature=0,
-                ),
-                stream=True,
-                client_kwargs={"timeout": timeout_seconds},
-            ),
+            model=chat_model,
             toolkit=build_openclaw_as2_toolkit(workspace, permission_mode),
             state=build_as2_agent_state(
                 run_id or "openclaw_as2_runtime",

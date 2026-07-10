@@ -26,7 +26,28 @@ from openclaw.storage import RunStorage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path(os.environ.get("OPENCLAW_DATA_DIR", PROJECT_ROOT / "data"))
-DEFAULT_WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", PROJECT_ROOT))
+DEFAULT_WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", PROJECT_ROOT)).expanduser().resolve()
+ENFORCE_WORKSPACE_BOUNDARY = os.environ.get(
+    "OPENCLAW_ENFORCE_WORKSPACE_BOUNDARY",
+    "0",
+).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_workspace_path(workspace_path: str | None) -> Path:
+    if not workspace_path:
+        return DEFAULT_WORKSPACE
+
+    target = Path(workspace_path).expanduser()
+    if not target.is_absolute():
+        target = DEFAULT_WORKSPACE / target
+    target = target.resolve()
+
+    if ENFORCE_WORKSPACE_BOUNDARY:
+        try:
+            target.relative_to(DEFAULT_WORKSPACE)
+        except ValueError as exc:
+            raise ValueError(f"workspace_path must stay inside {DEFAULT_WORKSPACE}") from exc
+    return target
 
 
 class EventBroker:
@@ -63,7 +84,7 @@ class RunManager:
             run_id=new_run_id(),
             goal=goal.strip(),
             permission_mode=permission_mode.upper(),
-            workspace_path=str(Path(workspace_path).expanduser().resolve()) if workspace_path else str(DEFAULT_WORKSPACE),
+            workspace_path=str(resolve_workspace_path(workspace_path)),
             planner_strategy=strategy,
             as2_available=self.as2_status.available,
         )
@@ -155,7 +176,14 @@ class OpenClawHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "invalid_planner_strategy"}, status=HTTPStatus.BAD_REQUEST)
                 return
 
-        state = MANAGER.create_run(goal, permission_mode, workspace_path, planner_strategy)
+        try:
+            state = MANAGER.create_run(goal, permission_mode, workspace_path, planner_strategy)
+        except ValueError as exc:
+            self._send_json(
+                {"error": "workspace_outside_boundary", "detail": str(exc)},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
         self._send_json({"run": state.to_dict()}, status=HTTPStatus.CREATED)
 
     def _handle_run_get(self, path: str, query: dict[str, list[str]]) -> None:

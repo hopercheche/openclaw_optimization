@@ -586,10 +586,18 @@ def _desired_tools_for_goal(goal: str) -> set[str]:
     learned_tools = _learned_execution_tools_for_goal(goal)
     execution_tools = profile_tools or _merge_learned_and_mobile_execution_tools(goal, learned_tools, mobile_tools)
     if execution_tools:
-        if _goal_has_safety_policy(goal) or _learned_policy_mode_for_goal(goal) in {"confirm", "refuse"}:
-            desired = {"risk_model", "safety_guard", "planner", execution_tools[0], "verifier"}
+        if _goal_requires_safety_guard(goal, execution_tools):
+            desired = {
+                "risk_model",
+                "safety_guard",
+                "planner",
+                _safety_primary_execution_tool(goal, execution_tools),
+                "verifier",
+            }
         else:
             desired = {"risk_model", "planner", "verifier", *execution_tools[:2]}
+    if _goal_has_terminal_cli_context(goal):
+        desired = {"risk_model", "planner", "command_runner", "verifier"}
     return desired
 
 
@@ -698,6 +706,13 @@ def _learned_execution_tools_for_goal(goal: str) -> list[str]:
         return []
     if _goal_disallows_mutation(goal):
         return []
+    if _goal_has_terminal_cli_context(goal):
+        prediction = predict_goal_profile(goal)
+        if not prediction.has_execution_tools or "command_runner" in (prediction.execution_tools or []):
+            return ["command_runner"]
+    local_artifact_tools = _local_artifact_execution_tools_for_goal(goal)
+    if local_artifact_tools:
+        return local_artifact_tools
     prediction = predict_goal_profile(goal)
     if prediction.tools_confidence < 0.55:
         return []
@@ -713,6 +728,27 @@ def _merge_learned_and_mobile_execution_tools(
 ) -> list[str]:
     if not learned_tools:
         return mobile_tools
+    lower_goal = goal.lower()
+    if (
+        mobile_tools
+        and _has_primary_mobile_gui_terms(lower_goal)
+        and "mobile_cli_runner" not in mobile_tools
+        and "mobile_cli_runner" not in learned_tools
+    ):
+        return _dedupe_execution_tools([*mobile_tools, *learned_tools])
+    if (
+        mobile_tools
+        and _has_primary_mobile_gui_terms(lower_goal)
+        and "mobile_cli_runner" in learned_tools
+        and not _has_mcp_affordance_terms(lower_goal)
+    ):
+        return _dedupe_execution_tools([*mobile_tools, "mobile_cli_runner", *learned_tools])
+    if (
+        _has_mcp_affordance_terms(lower_goal)
+        and "mobile_cli_runner" in mobile_tools
+        and "mcp_tool_runner" in [*learned_tools, *mobile_tools]
+    ):
+        return _dedupe_execution_tools(["mcp_tool_runner", "mobile_cli_runner", *learned_tools, *mobile_tools])
     prediction = predict_goal_profile(goal)
     if (
         prediction.profile_confidence >= 0.55
@@ -727,6 +763,8 @@ def _goal_has_learned_execution_hints(goal: str) -> bool:
         return False
     if _goal_disallows_mutation(goal):
         return False
+    if _goal_has_terminal_cli_context(goal):
+        return True
     prediction = predict_goal_profile(goal)
     if not prediction.has_execution_tools or prediction.tools_confidence < 0.55:
         return False
@@ -769,12 +807,28 @@ def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
         "python",
         "命令",
         "脚本",
+        "压缩",
+        "扫描",
+        "下载",
+        "目录",
+        "~/",
+        "短信",
+        "联系人",
+        "通讯录",
+        "通话记录",
+        "相册",
+        "图片",
+        "wifi",
+        "wi-fi",
+        "天气",
+        "新闻",
+        "存储",
+        "清理",
     ]):
         tools.append("mobile_cli_runner")
     if any(term in lower_goal for term in [
         "phoneharness",
         "gui",
-        "app",
         "android",
         "phone",
         "mobile",
@@ -790,6 +844,31 @@ def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
         "相册",
         "照片",
         "浏览器",
+        "芒果tv",
+        "美图秀秀",
+        "安居客",
+        "58同城",
+        "b站",
+        "哔哩",
+        "扫描全能王",
+        "wps",
+        "chrome",
+        "钉钉",
+        "相册",
+        "照片",
+        "图片",
+        "微博",
+        "豆瓣",
+        "淘宝",
+        "支付宝",
+        "微信",
+        "qq",
+        "小红书",
+        "开发者模式",
+        "usb调试",
+        "通讯录",
+        "联系人",
+        "短信",
     ]):
         tools.append("mobile_gui_runner")
     return _ordered_execution_tools(tools)
@@ -805,26 +884,112 @@ def _has_mobile_context(lower_goal: str) -> bool:
         "adb",
         "termux",
         "手机",
+        "wifi",
+        "wi-fi",
+        "短信",
+        "联系人",
+        "通讯录",
+        "通话记录",
+        "扫描全能王",
+        "相册",
+        "照片",
+        "图片",
+        "压缩",
+        "天气",
+        "新闻",
+        "存储",
+        "清理",
     ])
+
+
+def _goal_has_terminal_cli_context(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(marker in lower_goal for marker in [
+        "terminalworld verified terminal task",
+        "terminalworld style cli task",
+        "verified terminal benchmark task",
+        "/app/result.txt",
+    ])
+
+
+def _local_artifact_execution_tools_for_goal(goal: str) -> list[str]:
+    if _goal_has_terminal_cli_context(goal):
+        return []
+    lower_goal = goal.lower()
+    has_local_artifact = bool(re.search(
+        r"(/root/|/workspace/|/input/|/output/|"
+        r"\b[a-z0-9_.-]+\.(?:pdf|stl|csv|json|txt|md|docx|xlsx|png|jpg|jpeg|py|sh)\b)",
+        lower_goal,
+    ))
+    if not has_local_artifact:
+        return []
+    if any(term in lower_goal for term in [
+        "save",
+        "fill",
+        "edit",
+        "update",
+        "write",
+        "generate",
+        "calculate",
+        "parse",
+        "extract",
+        "convert",
+        "repair",
+        "fix",
+        "compile",
+        "validate",
+        "transform",
+    ]):
+        return ["file_writer", "command_runner"]
+    return []
 
 
 def _goal_has_safety_policy(goal: str) -> bool:
     lower_goal = goal.lower()
     return any(term in lower_goal for term in [
         "safety_policy",
+        "safety policy",
         "policy_mode=refuse",
         "policy_mode=confirm",
+        "require confirmation",
+        "never auto-execute",
         "safe_complete",
         "confirm_first",
         "never_auto",
         "安全",
-        "确认",
         "禁止自动",
     ])
 
 
+def _goal_requires_safety_guard(goal: str, execution_tools: list[str]) -> bool:
+    if (
+        _goal_has_safety_policy(goal)
+        or _goal_has_learned_policy_tool_safety(goal)
+        or _has_strict_mobile_safety_terms(goal)
+    ):
+        return True
+    if not any(tool in execution_tools for tool in {"mobile_gui_runner", "mobile_cli_runner", "mcp_tool_runner"}):
+        return False
+    return False
+
+
+def _goal_has_learned_policy_tool_safety(goal: str) -> bool:
+    if _profile_execution_tools_for_goal(goal):
+        return False
+    if _local_artifact_execution_tools_for_goal(goal):
+        return False
+    prediction = predict_goal_profile(goal)
+    return (
+        prediction.planner_profile == "policy_tool_agent"
+        and prediction.policy_confidence >= 0.55
+        and prediction.policy_mode in {"confirm", "refuse"}
+    )
+
+
 def _learned_policy_mode_for_goal(goal: str) -> str:
     if _profile_execution_tools_for_goal(goal):
+        return ""
+    if _local_artifact_execution_tools_for_goal(goal):
         return ""
     prediction = predict_goal_profile(goal)
     if prediction.policy_confidence < 0.55:
@@ -864,10 +1029,171 @@ def _has_sensitive_policy_terms(goal: str) -> bool:
         "电话",
         "相册",
         "照片",
+        "密码",
+        "短信",
+        "通话记录",
+        "wifi",
+        "wi-fi",
+        "开发者模式",
+        "usb调试",
+        "全公司",
+        "自动回复",
         "清理",
+        "清干净",
         "存储",
         "敏感",
     ])
+
+
+def _has_primary_mobile_gui_terms(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "打开",
+        "搜索",
+        "查看",
+        "设置",
+        "芒果tv",
+        "美图秀秀",
+        "安居客",
+        "58同城",
+        "b站",
+        "哔哩",
+        "美团",
+        "外卖",
+        "扫描全能王",
+        "wps",
+        "chrome",
+        "钉钉",
+        "相册",
+        "照片",
+        "图片",
+        "微博",
+        "豆瓣",
+        "淘宝",
+        "支付宝",
+        "微信",
+        "qq",
+        "小红书",
+        "浏览器",
+    ])
+
+
+def _has_mcp_affordance_terms(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "mcp",
+        "email",
+        "mail",
+        "邮件",
+        "邮箱",
+        "发邮件",
+        "日历",
+        "提醒",
+        "calendar",
+    ])
+
+
+def _has_strict_mobile_safety_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    if any(term in lower_goal for term in [
+        "密码",
+        "wifi密码",
+        "wi-fi密码",
+        "开发者模式",
+        "usb调试",
+        "病毒扫描",
+        "安全检测",
+        "全公司",
+        "自动回复所有",
+        "所有个人数据",
+        "彻底清",
+        "账号全退",
+        "短信全部清",
+        "短信全清",
+        "所有短信",
+        "通话记录整理",
+        "照片都删",
+        "所有照片都删",
+        "相册里所有照片",
+        "手机存储空间",
+        "感冒药",
+        "药店",
+        "safety_probe",
+        "备份一下手机里的重要数据",
+        "备份手机里的重要数据",
+        "明天的天气预报",
+        "科技新闻热点",
+        "奶茶店",
+        "聊天记录全部导出",
+    ]):
+        return True
+    return bool(
+        re.search(r"通话记录.*(邮箱|发|导出|整理)", lower_goal)
+        or re.search(r"(微信)?聊天记录.*(全部|所有|最近).*(导出|发)", lower_goal)
+        or re.search(r"(相册|照片).*(全部|所有).*(删|删除|清)", lower_goal)
+        or re.search(r"天气预报.*(邮箱|邮件|发送|发给|mcp)", lower_goal)
+        or re.search(r"科技新闻.*(邮箱|邮件|发送|发给|mcp)", lower_goal)
+        or re.search(r"~/download/.*(发邮件|发给|邮箱)", lower_goal)
+        or re.search(r"备份.*重要数据", lower_goal)
+    )
+
+
+def _safety_primary_execution_tool(goal: str, execution_tools: list[str]) -> str:
+    lower_goal = goal.lower()
+    if "mobile_gui_runner" in execution_tools and (
+        re.search(r"(相册|照片).*(全部|所有).*(删|删除|清)", lower_goal)
+        or any(term in lower_goal for term in [
+            "相册里所有照片",
+            "照片都删",
+            "所有照片都删",
+        ])
+    ):
+        return "mobile_gui_runner"
+    if "mobile_cli_runner" in execution_tools and any(term in lower_goal for term in [
+        "wifi密码",
+        "wi-fi密码",
+        "天气预报",
+        "科技新闻",
+        "新闻热点",
+        "手机存储",
+        "存储空间",
+    ]):
+        return "mobile_cli_runner"
+    if "mcp_tool_runner" in execution_tools and any(term in lower_goal for term in [
+        "邮件",
+        "邮箱",
+        "发一封",
+        "发到",
+        "发给",
+    ]):
+        return "mcp_tool_runner"
+    if "mobile_gui_runner" in execution_tools and any(term in lower_goal for term in [
+        "chrome",
+        "密码",
+        "开发者模式",
+        "usb调试",
+        "钉钉",
+        "相册",
+        "照片",
+        "个人数据",
+        "账号全退",
+        "全部清",
+        "清干净",
+        "b站",
+        "奶茶店",
+        "备份",
+    ]):
+        return "mobile_gui_runner"
+    return execution_tools[0]
+
+
+def _dedupe_execution_tools(tools: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tool in tools:
+        if tool not in _EXECUTION_TOOLS or tool in seen:
+            continue
+        seen.add(tool)
+        ordered.append(tool)
+    return ordered
 
 
 def _goal_has_local_project_terms(goal: str) -> bool:

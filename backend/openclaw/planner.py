@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -18,6 +19,20 @@ from .storage import RunStorage
 
 
 EventSink = Callable[[AuditEvent], None]
+SIMULATED_TOOL_DELAY_SECONDS = max(
+    0.0,
+    float(os.environ.get("OPENCLAW_SIMULATED_TOOL_DELAY_SECONDS", "0")),
+)
+_MODEL_PLANNER_POLICIES = {"always", "routed", "off"}
+_MODEL_ROUTE_TASK_MARKERS = (
+    "planner_profile=",
+    "source_family=",
+    "phoneharness",
+    "safety_policy=",
+    "external workflow",
+    "mobile workflow",
+    "mcp tool",
+)
 
 
 @dataclass(slots=True)
@@ -233,7 +248,8 @@ class LocalAuditPlanner:
                 "subtask": subtask.to_dict(),
                 "next_action": next_action,
             })
-            time.sleep(0.05)
+            if SIMULATED_TOOL_DELAY_SECONDS:
+                time.sleep(SIMULATED_TOOL_DELAY_SECONDS)
 
         queue_next_action = self._queue_next_action(verifier_next_actions)
         self._emit(state, "planner_queue_closed", "Planner closed subtask queue after verifier feedback.", {
@@ -251,7 +267,6 @@ class LocalAuditPlanner:
         })
         state.status = "completed"
         state.updated_at = utc_now()
-        state.event_count = len(self.storage.load_events(state.run_id)) + 1
         self.storage.save_state(state)
         self._emit(state, "run_completed", "Run completed and audit report is ready.", {
             "status": state.status,
@@ -436,12 +451,22 @@ class LocalAuditPlanner:
             })
             return self._generate_candidates(state.goal)
 
+        model_policy = self._model_planner_policy()
+        if not self._should_request_model_planner(state, model_policy):
+            self._emit(state, "as2_model_skipped", "AS2 model planner skipped by local routing policy.", {
+                "model_ready": True,
+                "model_policy": model_policy,
+                "route_reason": "deterministic_planner_confident",
+            })
+            return self._generate_candidates(state.goal)
+
         self._emit(state, "as2_model_started", "Requesting candidate plan from AS2 OpenAI-compatible Agent.", {
             "model_provider": self.as2_status.model_provider,
             "model_name": self.as2_status.default_model,
             "model_base_url": self.as2_status.model_base_url,
             "as2_runtime": self.as2_status.runtime,
             "architecture": self.as2_status.architecture,
+            "model_policy": model_policy,
         })
         result = generate_as2_openai_plan(
             state.goal,
@@ -456,12 +481,15 @@ class LocalAuditPlanner:
             })
 
         if result.used_model:
+            candidates = self._augment_model_candidates(state, result.candidates)
             self._emit(state, "as2_model_result", "AS2 OpenAI Agent produced planner candidates.", {
                 "model_name": result.model_name,
                 "candidate_count": len(result.candidates),
+                "augmented_candidate_count": len(candidates),
+                "candidate_merge_policy": "deterministic_first_model_expansion",
                 "architecture": result.architecture,
             })
-            return result.candidates
+            return candidates
 
         self._emit(state, "as2_model_fallback", "Falling back to deterministic planner candidates.", {
             "model_name": result.model_name,
@@ -470,10 +498,45 @@ class LocalAuditPlanner:
         })
         return self._generate_candidates(state.goal)
 
+    def _model_planner_policy(self) -> str:
+        policy = os.environ.get("OPENCLAW_MODEL_PLANNER_POLICY", "always").strip().lower()
+        if policy not in _MODEL_PLANNER_POLICIES:
+            return "always"
+        return policy
+
+    def _should_request_model_planner(self, state: RunState, model_policy: str) -> bool:
+        if model_policy == "always":
+            return True
+        if model_policy == "off":
+            return False
+
+        lower_goal = state.goal.lower()
+        if any(marker in lower_goal for marker in _MODEL_ROUTE_TASK_MARKERS):
+            return True
+        return False
+
+    def _augment_model_candidates(self, state: RunState, candidates: list[CandidateStep]) -> list[CandidateStep]:
+        deterministic = self._generate_candidates(state.goal)
+        deterministic_tools = {candidate.tool_name for candidate in deterministic}
+        expansion_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.tool_name not in deterministic_tools
+        ]
+        merged: list[CandidateStep] = []
+        seen: set[tuple[str, str]] = set()
+        for candidate in [*deterministic, *expansion_candidates]:
+            signature = (candidate.tool_name, " ".join(candidate.action.lower().split())[:120])
+            if signature in seen:
+                continue
+            seen.add(signature)
+            merged.append(candidate)
+        return merged
+
     def _emit(self, state: RunState, event_type: str, message: str, data: dict | None = None) -> AuditEvent:
         event_data = data or {}
         event_data.setdefault("as2_event_type", map_local_event_to_as2(event_type, event_data))
-        event_id = len(self.storage.load_events(state.run_id)) + 1
+        event_id = state.event_count + 1
         event = AuditEvent(
             run_id=state.run_id,
             event_id=event_id,
@@ -491,13 +554,17 @@ class LocalAuditPlanner:
 
     def _generate_candidates(self, goal: str) -> list[CandidateStep]:
         lower_goal = goal.lower()
+        terminal_execution_tools = _terminal_execution_tools_for_goal(goal)
         mutating_goal = any(term in lower_goal for term in ["write", "edit", "deploy", "delete", "remove", "优化", "修改"])
-        production_goal = any(term in lower_goal for term in ["prod", "production", "上线", "部署"])
-        mobile_goal = _looks_like_mobile_workflow(goal)
+        production_goal = (
+            not terminal_execution_tools
+            and any(term in lower_goal for term in ["prod", "production", "上线", "部署"])
+        )
+        mobile_goal = not terminal_execution_tools and _looks_like_mobile_workflow(goal)
         profile_execution_tools = _profile_execution_tools_for_goal(goal)
         mobile_execution_tools = _mobile_execution_tools_for_goal(goal)
         learned_execution_tools = _learned_execution_tools_for_goal(goal)
-        execution_tools = profile_execution_tools or _merge_learned_and_mobile_execution_tools(
+        execution_tools = terminal_execution_tools or profile_execution_tools or _merge_learned_and_mobile_execution_tools(
             goal,
             learned_execution_tools,
             mobile_execution_tools,
@@ -677,7 +744,22 @@ def _looks_like_mobile_workflow(goal: str) -> bool:
         "相册",
         "照片",
         "浏览器",
-        "app",
+        "芒果tv",
+        "美图秀秀",
+        "安居客",
+        "58同城",
+        "b站",
+        "哔哩",
+        "扫描全能王",
+        "wps",
+        "chrome",
+        "钉钉",
+        "wifi",
+        "wi-fi",
+        "天气",
+        "新闻",
+        "存储",
+        "清理",
     ])
 
 
@@ -703,6 +785,13 @@ def _learned_execution_tools_for_goal(goal: str) -> list[str]:
         return []
     if _goal_disallows_mutation(goal):
         return []
+    if _goal_has_terminal_cli_context(goal):
+        prediction = predict_goal_profile(goal)
+        if not prediction.has_execution_tools or "command_runner" in (prediction.execution_tools or []):
+            return ["command_runner"]
+    local_artifact_tools = _local_artifact_execution_tools_for_goal(goal)
+    if local_artifact_tools:
+        return local_artifact_tools
     prediction = predict_goal_profile(goal)
     if prediction.tools_confidence < 0.55:
         return []
@@ -726,6 +815,27 @@ def _merge_learned_and_mobile_execution_tools(
 ) -> list[str]:
     if not learned_tools:
         return mobile_tools
+    lower_goal = goal.lower()
+    if (
+        mobile_tools
+        and _has_primary_mobile_gui_terms(lower_goal)
+        and "mobile_cli_runner" not in mobile_tools
+        and "mobile_cli_runner" not in learned_tools
+    ):
+        return _dedupe_execution_tools([*mobile_tools, *learned_tools])
+    if (
+        mobile_tools
+        and _has_primary_mobile_gui_terms(lower_goal)
+        and "mobile_cli_runner" in learned_tools
+        and not _has_mcp_affordance_terms(lower_goal)
+    ):
+        return _dedupe_execution_tools([*mobile_tools, "mobile_cli_runner", *learned_tools])
+    if (
+        _has_mcp_affordance_terms(lower_goal)
+        and "mobile_cli_runner" in mobile_tools
+        and "mcp_tool_runner" in [*learned_tools, *mobile_tools]
+    ):
+        return _dedupe_execution_tools(["mcp_tool_runner", "mobile_cli_runner", *learned_tools, *mobile_tools])
     prediction = predict_goal_profile(goal)
     if (
         prediction.profile_confidence >= 0.55
@@ -761,11 +871,27 @@ def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
         "python",
         "命令",
         "脚本",
+        "压缩",
+        "扫描",
+        "下载",
+        "目录",
+        "~/",
+        "短信",
+        "联系人",
+        "通讯录",
+        "通话记录",
+        "相册",
+        "图片",
+        "wifi",
+        "wi-fi",
+        "天气",
+        "新闻",
+        "存储",
+        "清理",
     ]):
         tools.append("mobile_cli_runner")
     if any(term in lower_goal for term in [
         "gui",
-        "app",
         "android",
         "phone",
         "手机",
@@ -780,12 +906,43 @@ def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
         "相册",
         "照片",
         "浏览器",
+        "芒果tv",
+        "美图秀秀",
+        "安居客",
+        "58同城",
+        "b站",
+        "哔哩",
+        "扫描全能王",
+        "wps",
+        "chrome",
+        "钉钉",
+        "相册",
+        "照片",
+        "图片",
+        "微博",
+        "豆瓣",
+        "淘宝",
+        "支付宝",
+        "微信",
+        "qq",
+        "小红书",
+        "开发者模式",
+        "usb调试",
+        "通讯录",
+        "联系人",
+        "短信",
     ]):
         tools.append("mobile_gui_runner")
     if not tools and _looks_like_mobile_workflow(goal):
         tools.append("mobile_gui_runner")
 
     return _ordered_execution_tools(tools)
+
+
+def _terminal_execution_tools_for_goal(goal: str) -> list[str]:
+    if _goal_has_terminal_cli_context(goal):
+        return ["command_runner"]
+    return []
 
 
 def _has_mobile_context(lower_goal: str) -> bool:
@@ -798,7 +955,64 @@ def _has_mobile_context(lower_goal: str) -> bool:
         "adb",
         "termux",
         "手机",
+        "wifi",
+        "wi-fi",
+        "短信",
+        "联系人",
+        "通讯录",
+        "通话记录",
+        "扫描全能王",
+        "相册",
+        "照片",
+        "图片",
+        "压缩",
+        "天气",
+        "新闻",
+        "存储",
+        "清理",
     ])
+
+
+def _goal_has_terminal_cli_context(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(marker in lower_goal for marker in [
+        "terminalworld verified terminal task",
+        "terminalworld style cli task",
+        "verified terminal benchmark task",
+        "/app/result.txt",
+    ])
+
+
+def _local_artifact_execution_tools_for_goal(goal: str) -> list[str]:
+    if _goal_has_terminal_cli_context(goal):
+        return []
+    lower_goal = goal.lower()
+    has_local_artifact = bool(re.search(
+        r"(/root/|/workspace/|/input/|/output/|"
+        r"\b[a-z0-9_.-]+\.(?:pdf|stl|csv|json|txt|md|docx|xlsx|png|jpg|jpeg|py|sh)\b)",
+        lower_goal,
+    ))
+    if not has_local_artifact:
+        return []
+    if any(term in lower_goal for term in [
+        "save",
+        "fill",
+        "edit",
+        "update",
+        "write",
+        "generate",
+        "calculate",
+        "parse",
+        "extract",
+        "convert",
+        "repair",
+        "fix",
+        "compile",
+        "validate",
+        "transform",
+    ]):
+        return ["file_writer", "command_runner"]
+    return []
 
 
 _EXECUTION_TOOLS = {
@@ -819,6 +1033,7 @@ def _needs_external_workflow_candidates(goal: str, execution_tools: list[str]) -
         or "mobile_gui_runner" in execution_tools
         or "mobile_cli_runner" in execution_tools
         or "safety_policy=" in lower_goal
+        or _goal_requires_safety_guard(goal, execution_tools)
         or learned_policy in {"confirm", "refuse"}
         or "planner_profile=policy_tool_agent" in lower_goal
         or "planner_profile=api_planning" in lower_goal
@@ -835,7 +1050,7 @@ def _external_workflow_candidates(execution_tools: list[str], goal: str) -> list
         "never_auto",
         "confirm_first",
         "safe_complete",
-    ]) or learned_policy in {"confirm", "refuse"}
+    ]) or learned_policy in {"confirm", "refuse"} or _goal_requires_safety_guard(goal, execution_tools)
     candidates = [
         CandidateStep(
             title="Check external workflow safety policy",
@@ -914,6 +1129,8 @@ def _goal_disallows_mutation(goal: str) -> bool:
 def _learned_policy_mode_for_goal(goal: str) -> str:
     if _profile_execution_tools_for_goal(goal):
         return ""
+    if _local_artifact_execution_tools_for_goal(goal):
+        return ""
     prediction = predict_goal_profile(goal)
     if prediction.policy_confidence < 0.55:
         return ""
@@ -923,6 +1140,23 @@ def _learned_policy_mode_for_goal(goal: str) -> str:
     ):
         return ""
     return prediction.policy_mode
+
+
+def _goal_has_safety_policy(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "safety_policy",
+        "safety policy",
+        "policy_mode=refuse",
+        "policy_mode=confirm",
+        "require confirmation",
+        "never auto-execute",
+        "safe_complete",
+        "confirm_first",
+        "never_auto",
+        "安全",
+        "禁止自动",
+    ])
 
 
 def _has_sensitive_policy_terms(goal: str) -> bool:
@@ -952,10 +1186,147 @@ def _has_sensitive_policy_terms(goal: str) -> bool:
         "电话",
         "相册",
         "照片",
+        "密码",
+        "短信",
+        "通话记录",
+        "wifi",
+        "wi-fi",
+        "开发者模式",
+        "usb调试",
+        "全公司",
+        "自动回复",
         "清理",
+        "清干净",
         "存储",
         "敏感",
     ])
+
+
+def _goal_requires_safety_guard(goal: str, execution_tools: list[str]) -> bool:
+    if (
+        _goal_has_safety_policy(goal)
+        or _goal_has_learned_policy_tool_safety(goal)
+        or _has_strict_mobile_safety_terms(goal)
+    ):
+        return True
+    if not any(tool in execution_tools for tool in {"mobile_gui_runner", "mobile_cli_runner", "mcp_tool_runner"}):
+        return False
+    return False
+
+
+def _goal_has_learned_policy_tool_safety(goal: str) -> bool:
+    if _profile_execution_tools_for_goal(goal):
+        return False
+    if _local_artifact_execution_tools_for_goal(goal):
+        return False
+    prediction = predict_goal_profile(goal)
+    return (
+        prediction.planner_profile == "policy_tool_agent"
+        and prediction.policy_confidence >= 0.55
+        and prediction.policy_mode in {"confirm", "refuse"}
+    )
+
+
+def _has_primary_mobile_gui_terms(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "打开",
+        "搜索",
+        "查看",
+        "设置",
+        "芒果tv",
+        "美图秀秀",
+        "安居客",
+        "58同城",
+        "b站",
+        "哔哩",
+        "美团",
+        "外卖",
+        "扫描全能王",
+        "wps",
+        "chrome",
+        "钉钉",
+        "相册",
+        "照片",
+        "图片",
+        "微博",
+        "豆瓣",
+        "淘宝",
+        "支付宝",
+        "微信",
+        "qq",
+        "小红书",
+        "浏览器",
+    ])
+
+
+def _has_mcp_affordance_terms(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "mcp",
+        "email",
+        "mail",
+        "邮件",
+        "邮箱",
+        "发邮件",
+        "日历",
+        "提醒",
+        "calendar",
+    ])
+
+
+def _has_strict_mobile_safety_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    if any(term in lower_goal for term in [
+        "密码",
+        "wifi密码",
+        "wi-fi密码",
+        "开发者模式",
+        "usb调试",
+        "病毒扫描",
+        "安全检测",
+        "全公司",
+        "自动回复所有",
+        "所有个人数据",
+        "彻底清",
+        "账号全退",
+        "短信全部清",
+        "短信全清",
+        "所有短信",
+        "通话记录整理",
+        "照片都删",
+        "所有照片都删",
+        "相册里所有照片",
+        "手机存储空间",
+        "感冒药",
+        "药店",
+        "safety_probe",
+        "备份一下手机里的重要数据",
+        "备份手机里的重要数据",
+        "明天的天气预报",
+        "科技新闻热点",
+        "奶茶店",
+        "聊天记录全部导出",
+    ]):
+        return True
+    return bool(
+        re.search(r"通话记录.*(邮箱|发|导出|整理)", lower_goal)
+        or re.search(r"(微信)?聊天记录.*(全部|所有|最近).*(导出|发)", lower_goal)
+        or re.search(r"(相册|照片).*(全部|所有).*(删|删除|清)", lower_goal)
+        or re.search(r"天气预报.*(邮箱|邮件|发送|发给|mcp)", lower_goal)
+        or re.search(r"科技新闻.*(邮箱|邮件|发送|发给|mcp)", lower_goal)
+        or re.search(r"~/download/.*(发邮件|发给|邮箱)", lower_goal)
+        or re.search(r"备份.*重要数据", lower_goal)
+    )
+
+
+def _dedupe_execution_tools(tools: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tool in tools:
+        if tool not in _EXECUTION_TOOLS or tool in seen:
+            continue
+        seen.add(tool)
+        ordered.append(tool)
+    return ordered
 
 
 def _goal_has_local_project_terms(goal: str) -> bool:

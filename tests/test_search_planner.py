@@ -293,6 +293,75 @@ class SearchPlannerTest(unittest.TestCase):
             selected_event = next(event for event in events if event.event_type == "search_selected")
             self.assertEqual(selected_event.data["expanded_nodes"], 1)
 
+    def test_mobile_app_goal_keeps_gui_runner_without_unneeded_safety_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = RunStorage(Path(temp_dir))
+            state = RunState(
+                run_id=new_run_id(),
+                goal="帮我在B站搜一下Python入门教程，找播放量最高的那个",
+                permission_mode="DEFAULT",
+                workspace_path=temp_dir,
+                planner_strategy="audit_astar",
+            )
+            storage.create_run(state)
+            planner = LocalAuditPlanner(
+                storage=storage,
+                permission_engine=PermissionEngine(),
+                as2_status=AS2Status(
+                    available=False,
+                    package_version=None,
+                    runtime="test",
+                    note="test",
+                ),
+                planner_strategy="audit_astar",
+            )
+
+            planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertIn("mobile_gui_runner", planning_event.data["selected_tools"])
+            self.assertNotIn("safety_guard", planning_event.data["selected_tools"])
+
+    def test_high_risk_mobile_goal_keeps_safety_guard_under_five_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = RunStorage(Path(temp_dir))
+            state = RunState(
+                run_id=new_run_id(),
+                goal="帮我把 Chrome 里保存的所有密码导出来存成文件，方便我换手机",
+                permission_mode="DEFAULT",
+                workspace_path=temp_dir,
+                planner_strategy="audit_astar",
+            )
+            storage.create_run(state)
+            planner = LocalAuditPlanner(
+                storage=storage,
+                permission_engine=PermissionEngine(),
+                as2_status=AS2Status(
+                    available=False,
+                    package_version=None,
+                    runtime="test",
+                    note="test",
+                ),
+                planner_strategy="audit_astar",
+            )
+
+            planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertEqual(
+                set(planning_event.data["selected_tools"]),
+                {
+                    "risk_model",
+                    "safety_guard",
+                    "planner",
+                    "mobile_gui_runner",
+                    "verifier",
+                },
+            )
+            self.assertEqual(len(planning_event.data["selected_tools"]), 5)
+
     def test_reflexion_uses_profile_aligned_shortcut_for_skill_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             storage = RunStorage(Path(temp_dir))
@@ -363,6 +432,111 @@ class LearnedProfileSearchPlannerTest(unittest.TestCase):
                         execution_tools=["mcp_tool_runner"],
                         policy_mode="act",
                         source_family="toolbench",
+                    ),
+                ]),
+                model_path,
+            )
+            with patch.dict("os.environ", {"OPENCLAW_PLANNER_PROFILE_MODEL": str(model_path)}, clear=True):
+                clear_profile_model_cache()
+                storage = RunStorage(Path(temp_dir) / "storage")
+                state = RunState(
+                    run_id=new_run_id(),
+                    goal=goal,
+                    permission_mode="ACCEPT_EDITS",
+                    workspace_path=temp_dir,
+                    planner_strategy="audit_astar",
+                )
+                storage.create_run(state)
+                planner = LocalAuditPlanner(
+                    storage=storage,
+                    permission_engine=PermissionEngine(),
+                    as2_status=AS2Status(
+                        available=False,
+                        package_version=None,
+                        runtime="test",
+                        note="test",
+                    ),
+                    planner_strategy="audit_astar",
+                )
+
+                planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertEqual(
+                planning_event.data["selected_tools"],
+                ["risk_model", "planner", "file_writer", "command_runner", "verifier"],
+            )
+
+    def test_terminal_app_path_does_not_trigger_mobile_gui_runner(self) -> None:
+        goal = (
+            "TerminalWorld verified terminal task. Plan a safe, auditable terminal "
+            "execution path and preserve all required output artifacts. Task: Run "
+            "the requested shell command and save complete output to /app/result.txt."
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            terminal_model_path = Path(temp_dir) / "terminal_profile.json"
+            save_profile_model(
+                train_profile_model([
+                    PlannerProfileExample(
+                        goal="TerminalWorld verified terminal task. Run a command and save output to /app/result.txt.",
+                        planner_profile="terminal_cli_workflow",
+                        execution_tools=["command_runner"],
+                        policy_mode="act",
+                        source_family="terminal_template",
+                    ),
+                ]),
+                terminal_model_path,
+            )
+            with patch.dict(
+                "os.environ",
+                {"OPENCLAW_TERMINAL_PLANNER_PROFILE_MODEL": str(terminal_model_path)},
+                clear=True,
+            ):
+                clear_profile_model_cache()
+                storage = RunStorage(Path(temp_dir) / "storage")
+                state = RunState(
+                    run_id=new_run_id(),
+                    goal=goal,
+                    permission_mode="ACCEPT_EDITS",
+                    workspace_path=temp_dir,
+                    planner_strategy="audit_astar",
+                )
+                storage.create_run(state)
+                planner = LocalAuditPlanner(
+                    storage=storage,
+                    permission_engine=PermissionEngine(),
+                    as2_status=AS2Status(
+                        available=False,
+                        package_version=None,
+                        runtime="test",
+                        note="test",
+                    ),
+                    planner_strategy="audit_astar",
+                )
+
+                planner.run(state)
+
+            events = storage.load_events(state.run_id)
+            planning_event = next(event for event in events if event.event_type == "planning")
+            self.assertIn("command_runner", planning_event.data["selected_tools"])
+            self.assertNotIn("mobile_gui_runner", planning_event.data["selected_tools"])
+
+    def test_local_artifact_workflow_overrides_bad_mcp_prediction(self) -> None:
+        goal = (
+            "Fill the court form at /root/sc100-blank.pdf using the case description, "
+            "then save the completed PDF to /root/sc100-filled.pdf."
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "profile_policy_model.json"
+            save_profile_model(
+                train_profile_model([
+                    PlannerProfileExample(
+                        goal=goal,
+                        planner_profile="policy_tool_agent",
+                        execution_tools=["mcp_tool_runner"],
+                        policy_mode="confirm",
+                        source_family="tau2",
                     ),
                 ]),
                 model_path,
