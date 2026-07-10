@@ -1,0 +1,46 @@
+{
+  "id": "context-index",
+  "name": "Context Index",
+  "description": "Structured progressive-disclosure context assembly for long-running agents.",
+  "kind": "context-engine",
+  "activation": {
+    "onStartup": true
+  },
+  "commandAliases": [{ "name": "context-index" }],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": { "type": "string", "enum": ["baseline", "progressive"] },
+      "defaultProjectId": { "type": "string", "minLength": 1 },
+      "recentMessageLimit": { "type": "integer", "minimum": 1, "maximum": 50 },
+      "maxSnippetChars": { "type": "integer", "minimum": 80, "maximum": 8000 },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "topK": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "candidateK": { "type": "integer", "minimum": 1, "maximum": 500 },
+          "halfLifeDays": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      },
+      "scoring": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "keywordWeight": { "type": "number", "minimum": 0 },
+          "scopeWeight": { "type": "number", "minimum": 0 },
+          "stageWeight": { "type": "number", "minimum": 0 },
+          "recencyWeight": { "type": "number", "minimum": 0 },
+          "importanceWeight": { "type": "number", "minimum": 0 },
+          "validityWeight": { "type": "number", "minimum": 0 }
+        }
+      },
+      "audit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "enabled": { "type": "boolean" } }
+      }
+    }
+  }
+}

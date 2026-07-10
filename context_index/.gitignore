@@ -1,0 +1,3 @@
+node_modules/
+artifacts/
+.pnpm-debug.log*

@@ -1,0 +1,29 @@
+{
+  "name": "@hopercheche/openclaw-context-index",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Structured progressive-disclosure context engine for OpenClaw",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "commander": "15.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  },
+  "scripts": {
+    "benchmark": "node --import tsx src/benchmark.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
