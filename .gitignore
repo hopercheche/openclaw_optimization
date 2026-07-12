@@ -4,12 +4,11 @@ __pycache__/
 .env
 .env.*
 outputs/
-evalscope/
 openclaw-main/
-
+.agents/
 # Local archives and downloaded source snapshots
 *.zip
-
+run.py
 # EvalScope/OpenClaw runtime state created by docker-compose volumes.
 # This includes OpenClaw's own nested workspace git repo and secrets/config.
 .openclaw-eval/

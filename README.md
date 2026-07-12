@@ -1252,13 +1252,13 @@ python -m pip install -r requirements.txt
 
 ### 13.5 使用 `run.py` 验证新指标
 
-根目录 `run.py` 是当前 OpenClaw BrowseComp 测试入口，默认配置为：
+根目录 `run.py` 是当前 OpenClaw EvalScope 测试入口，默认配置为：
 
 - baseline 镜像 `openclaw-baseline:2026.6.11-srcsnap`
-- `browsecomp --limit 2`
+- `gsm8k --limit 1`
 - `judge_strategy=auto`，Judge 默认复用被评测模型
 - `collect_perf=true`，生成任务级 token 和数据集汇总列
-- 输出到 `outputs/openclaw_browsecomp_token_metrics/`
+- 输出到 `outputs/<model_id>__<dataset>/<timestamp>/`
 
 运行前确保 `.env` 或环境变量中存在 `ALIYUNCS_API_KEY`：
 
@@ -1279,3 +1279,256 @@ export EVALSCOPE_LIMIT=5
 
 python run.py
 ```
+
+常用的结构化覆盖变量：
+
+| 环境变量 | 格式 | 用途 |
+|---|---|---|
+| `EVALSCOPE_DATASETS` | 逗号分隔或 JSON list | 一次评测多个数据集 |
+| `EVALSCOPE_DATASET_ARGS` | JSON object | subset、few-shot、dataset id 等数据集参数 |
+| `EVALSCOPE_GENERATION_CONFIG` | JSON object | 覆盖任意生成参数 |
+| `EVALSCOPE_AGENT_CONFIG` | JSON object | 覆盖 external agent/bridge/runner 配置 |
+| `EVALSCOPE_JUDGE_MODEL_ARGS` | JSON object | 完整 Judge 模型配置 |
+| `EVALSCOPE_TASK_CONFIG` | JSON object | 最后应用的完整 TaskConfig 深度覆盖，优先级最高 |
+
+例如，MMLU 默认有 57 个 subset，`limit=2` 会产生 `57 * 2 = 114` 个任务。只测试两个学科可以配置：
+
+```bash
+export EVALSCOPE_DATASET=mmlu
+export EVALSCOPE_LIMIT=2
+export EVALSCOPE_DATASET_ARGS='{
+  "mmlu": {
+    "subset_list": ["abstract_algebra", "anatomy"],
+    "few_shot_num": 0
+  }
+}'
+
+python run.py
+```
+
+未单独映射的 EvalScope 参数也可以通过最高优先级配置覆盖：
+
+```bash
+export EVALSCOPE_TASK_CONFIG='{
+  "eval_batch_size": 1,
+  "generation_config": {"top_p": 0.9},
+  "judge_strategy": "rule"
+}'
+```
+
+OpenClaw harness v1 会为每个样本更新共享 provider/token，因此 `EVALSCOPE_BATCH_SIZE` 默认并建议保持为 `1`。
+
+默认情况下，输出目录使用最终生效的模型 ID 和数据集名称。例如：
+
+```text
+outputs/openclaw_deepseek-v3.2__gsm8k/20260712_093913/
+```
+
+- `EVALSCOPE_OUTPUT_ROOT` 修改输出根目录，同时保留自动生成的模型/数据集目录。
+- `EVALSCOPE_WORK_DIR` 直接指定完整工作目录，并关闭自动的模型/数据集目录命名。
+- EvalScope 默认继续在工作目录下追加时间戳；只有显式设置 `EVALSCOPE_NO_TIMESTAMP=true` 才会取消。
+
+## 14. 五类非 Harbor Benchmark
+
+以下数据集均由 EvalScope 直接从 ModelScope 下载，不依赖 Harbor benchmark 镜像。评测入口仍然是：
+
+```text
+EvalScope -> openclaw-cli-harness -> openclaw agent --json -> OpenClaw Gateway -> EvalScope bridge -> model
+```
+
+运行前先启动虚拟环境，并确保 OpenClaw baseline 或 modified 镜像已经构建完成：
+
+```bash
+cd /path/to/AIE4902
+source .venv/bin/activate
+```
+
+模型、API 地址和 API key 继续从 `.env` 或 `EVALSCOPE_MODEL`、`EVALSCOPE_API_URL`、
+`EVALSCOPE_API_KEY` 读取。建议为同一组 baseline/modified 实验固定相同的模型、seed、生成参数和
+Judge 配置，只切换 `OPENCLAW_IMAGE`、`OPENCLAW_COMPOSE_PROJECT` 与 Gateway 端口。
+
+### 14.1 数据集选择
+
+| 能力 | 原始要求 | 本项目采用的 EvalScope 数据集 | 主要指标 | 选择说明 |
+|---|---|---|---|---|
+| 基础知识 | MMLU-Pro | `mmlu_pro` | `acc` | 原生 MMLU-Pro，包含 14 个学科 |
+| 复杂推理 | GPQA | `gpqa_diamond` | `acc` | GPQA Diamond，包含 198 道高难度理工科问题 |
+| 多轮对话 | Lost in Conversation | `longmemeval` | `acc` | EvalScope 当前没有 LiC adapter，使用长对话历史中的意图、事实和时间信息检索作为近似 |
+| 多步工具使用 | ToolBench | `acebench` 的 `agent` 子集 | `acc`、`process_acc`、`end_state_acc` | API schema 会写入文本 prompt，能够通过 OpenClaw external CLI 评测工具选择和调用序列规划 |
+| 记忆机制 | LoCoMo | `locomo` | `f1` | 使用多 session 对话历史测试长期记忆与时间推理 |
+
+这里有两个重要边界：
+
+- EvalScope 的 `multi_if` 虽然是真正逐轮调用模型的多轮数据集，但其 `MultiTurnAdapter` 当前直接调用
+  `model.generate()`，不会进入本项目的 OpenClaw external CLI runner，因此没有把它作为 LiC 替代项。
+- EvalScope 的 `tool_bench` 实际是 `ToolBench-Static`。当前 adapter 没有把工具 schema 放进 external
+  harness 的 instruction，OpenClaw CLI 无法看到完整工具定义。这里改用会把 API schema 同时写入文本
+  prompt 的 `acebench`。它评测的是静态调用序列规划，不会真的执行 API；若要测试有状态工具执行，仍需
+  额外实现 OpenClaw 工具环境与 EvalScope sample tools 的桥接。
+
+下面的命令默认都是小样本启动配置。`EVALSCOPE_DATASETS=`、`EVALSCOPE_TASK_CONFIG=` 和
+`EVALSCOPE_WORK_DIR=` 用于清除 shell 或 `.env` 中可能遗留的批量数据集、完整配置和固定输出目录，保证
+当前命令中的数据集参数生效。正式评测时提高或删除 `EVALSCOPE_LIMIT`。
+
+### 14.2 MMLU-Pro：基础知识
+
+先使用 `computer science` 子集验证链路，避免默认同时运行全部 14 个学科：
+
+```bash
+EVALSCOPE_DATASETS= \
+EVALSCOPE_TASK_CONFIG= \
+EVALSCOPE_WORK_DIR= \
+EVALSCOPE_DATASET=mmlu_pro \
+EVALSCOPE_DATASET_ARGS='{
+  "mmlu_pro": {
+    "subset_list": ["computer science"],
+    "few_shot_num": 0
+  }
+}' \
+EVALSCOPE_LIMIT=5 \
+EVALSCOPE_JUDGE_STRATEGY=rule \
+python run.py
+```
+
+正式评测全部学科时删除 `subset_list`，或显式填写：`computer science`、`math`、`chemistry`、
+`engineering`、`law`、`biology`、`health`、`physics`、`business`、`philosophy`、`economics`、
+`other`、`psychology`、`history`。
+
+### 14.3 GPQA-Diamond：复杂推理
+
+GPQA-Diamond 没有额外 subset，默认使用 0-shot 和规则准确率：
+
+```bash
+EVALSCOPE_DATASETS= \
+EVALSCOPE_TASK_CONFIG= \
+EVALSCOPE_WORK_DIR= \
+EVALSCOPE_DATASET=gpqa_diamond \
+EVALSCOPE_DATASET_ARGS='{
+  "gpqa_diamond": {
+    "few_shot_num": 0
+  }
+}' \
+EVALSCOPE_LIMIT=5 \
+EVALSCOPE_JUDGE_STRATEGY=rule \
+python run.py
+```
+
+### 14.4 LongMemEval：多轮对话近似项
+
+`s` 子集约包含 115K-token 的多 session 历史。`auto` 会按 adapter 配置启用 LongMemEval 的 LLM
+Judge；Judge 默认复用被评测模型，也可以使用第 13.1 节的环境变量单独指定：
+
+```bash
+EVALSCOPE_DATASETS= \
+EVALSCOPE_TASK_CONFIG= \
+EVALSCOPE_WORK_DIR= \
+EVALSCOPE_DATASET=longmemeval \
+EVALSCOPE_DATASET_ARGS='{
+  "longmemeval": {
+    "subset_list": ["s"],
+    "few_shot_num": 0,
+    "extra_params": {
+      "eval_mode": "long_context",
+      "history_format": "json",
+      "reading_method": "con",
+      "topk_context": 1000
+    }
+  }
+}' \
+EVALSCOPE_LIMIT=1 \
+EVALSCOPE_JUDGE_STRATEGY=auto \
+python run.py
+```
+
+这条命令测试的是一次 OpenClaw 任务读取完整历史后的回答，不是 EvalScope 与 OpenClaw 之间逐轮发送
+消息。仅验证评分链路或模型上下文较小时，可以改用 `subset_list=["oracle"]`，并把 `eval_mode` 改成
+`oracle_context`；该模式只提供证据 session，不能代替正式的长上下文结果。
+
+### 14.5 ACEBench Agent：多步工具使用近似项
+
+`agent` 子集要求模型根据 API schema 规划调用序列。OpenClaw external harness 会收到包含 schema、
+初始状态和任务描述的文本 prompt：
+
+```bash
+EVALSCOPE_DATASETS= \
+EVALSCOPE_TASK_CONFIG= \
+EVALSCOPE_WORK_DIR= \
+EVALSCOPE_DATASET=acebench \
+EVALSCOPE_DATASET_ARGS='{
+  "acebench": {
+    "subset_list": ["agent"],
+    "few_shot_num": 0
+  }
+}' \
+EVALSCOPE_LIMIT=5 \
+EVALSCOPE_JUDGE_STRATEGY=rule \
+python run.py
+```
+
+OpenClaw 应按 prompt 要求输出调用列表，例如 `[ApiName(key="value")]`。该 adapter 会比较调用过程
+milestone；如果输出中还包含可识别的最终状态 JSON，则同时计算 `end_state_acc`。
+
+### 14.6 LoCoMo：长期记忆
+
+LoCoMo 的 `qa` 子集把带日期的多 session 对话历史和问题交给 OpenClaw，使用规则 F1 评分：
+
+```bash
+EVALSCOPE_DATASETS= \
+EVALSCOPE_TASK_CONFIG= \
+EVALSCOPE_WORK_DIR= \
+EVALSCOPE_DATASET=locomo \
+EVALSCOPE_DATASET_ARGS='{
+  "locomo": {
+    "subset_list": ["qa"],
+    "few_shot_num": 0,
+    "extra_params": {
+      "eval_mode": "long_context"
+    }
+  }
+}' \
+EVALSCOPE_LIMIT=1 \
+EVALSCOPE_JUDGE_STRATEGY=rule \
+python run.py
+```
+
+`oracle_context` 只保留答案证据，可用于验证 prompt、runner 和评分链路；正式比较 OpenClaw 的长期
+记忆能力时应保持 `long_context`。
+
+### 14.7 Baseline 与 Modified 对比
+
+五个数据集都使用相同命令，仅切换 OpenClaw 实验环境。例如 modified 镜像：
+
+```bash
+export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-modified
+export OPENCLAW_GATEWAY_PORT=18790
+export EVALSCOPE_MODEL_ID=openclaw_modified_deepseek_v32
+```
+
+baseline 建议使用另一组项目名、端口和模型显示 ID：
+
+```bash
+export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline
+export OPENCLAW_GATEWAY_PORT=18789
+export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
+```
+
+输出会按模型 ID、数据集和时间戳分开，例如：
+
+```text
+outputs/openclaw_baseline_deepseek_v32__gpqa_diamond/20260712_120000/
+outputs/openclaw_modified_deepseek_v32__gpqa_diamond/20260712_130000/
+```
+
+正式对比时至少固定以下变量：
+
+```bash
+export EVALSCOPE_SEED=42
+export EVALSCOPE_TEMPERATURE=0.0
+export EVALSCOPE_BATCH_SIZE=1
+export EVALSCOPE_COLLECT_PERF=true
+```
+
+其中 LongMemEval 还必须让 baseline 和 modified 使用完全相同的 Judge 模型与 Judge generation
+config。任务 token 统计只包含被评测 OpenClaw harness 的模型调用，不包含 Judge 消耗。

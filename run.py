@@ -1,4 +1,10 @@
-"""Run the OpenClaw CLI harness against BrowseComp with task token metrics."""
+"""Run the OpenClaw CLI harness with environment-overridable defaults.
+
+Every default below uses ``os.environ.setdefault``. Shell variables or values
+loaded from ``EVALSCOPE_ENV_FILE`` therefore take precedence. For parameters
+not listed individually, ``EVALSCOPE_TASK_CONFIG`` can override any nested
+EvalScope TaskConfig field as a JSON object.
+"""
 
 from __future__ import annotations
 
@@ -18,63 +24,95 @@ def _set_default(name: str, value: str | Path) -> None:
     os.environ.setdefault(name, str(value))
 
 
+def _set_defaults(values: dict[str, str | Path]) -> None:
+    for name, value in values.items():
+        _set_default(name, value)
+
+
 def _safe_name(value: str) -> str:
     """Convert a model name into a report/path-safe identifier."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._-") or "model"
 
 
 def configure_environment() -> None:
-    """Configure a small real-model BrowseComp harness evaluation."""
-    load_dotenv_file(PROJECT_ROOT / ".env")
+    """Configure a small real-model harness evaluation."""
+    env_file = Path(os.getenv("EVALSCOPE_ENV_FILE", PROJECT_ROOT / ".env")).expanduser()
+    load_dotenv_file(env_file)
 
     model_name = os.getenv("EVALSCOPE_MODEL") or get_model_name()
     api_key = os.getenv("EVALSCOPE_API_KEY") or os.getenv("ALIYUNCS_API_KEY")
-    if not api_key:
+    eval_type = os.getenv("EVALSCOPE_EVAL_TYPE", "openai_api")
+    if not api_key and eval_type != "mock_llm" and not os.getenv("EVALSCOPE_TASK_CONFIG"):
         raise RuntimeError(
             "Set ALIYUNCS_API_KEY or EVALSCOPE_API_KEY in the environment or project .env before running run.py"
         )
 
-    state_dir = PROJECT_ROOT / "openclaw_evalscope_cli/.openclaw-eval/state"
-    secret_dir = PROJECT_ROOT / "openclaw_evalscope_cli/.openclaw-eval/secrets"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    secret_dir.mkdir(parents=True, exist_ok=True)
+    default_state_dir = PROJECT_ROOT / "openclaw_evalscope_cli/.openclaw-eval/state"
+    default_secret_dir = PROJECT_ROOT / "openclaw_evalscope_cli/.openclaw-eval/secrets"
+    dataset_name = os.getenv("EVALSCOPE_DATASET", "gsm8k")
 
-    # OpenClaw baseline runtime. Override any value from the shell for a
-    # modified-image comparison without editing this file.
-    _set_default("OPENCLAW_IMAGE", "openclaw-baseline:2026.6.11-srcsnap")
-    _set_default("OPENCLAW_COMPOSE_PROJECT", "openclaw-eval-baseline")
-    _set_default("OPENCLAW_GATEWAY_PORT", "18789")
-    _set_default("OPENCLAW_EVAL_STATE_DIR", state_dir)
-    _set_default("OPENCLAW_EVAL_SECRET_DIR", secret_dir)
-    _set_default("OPENCLAW_CLEAN_WORKSPACE", "true")
-    _set_default("OPENCLAW_PRESERVE_WORKSPACE_GIT", "true")
+    _set_defaults({
+        # Docker/OpenClaw runtime.
+        "OPENCLAW_IMAGE": "openclaw-baseline:2026.6.11-srcsnap",
+        "OPENCLAW_COMPOSE_PROJECT": "openclaw-eval-baseline",
+        "OPENCLAW_GATEWAY_SERVICE": "openclaw-gateway",
+        "OPENCLAW_CLI_SERVICE": "openclaw-cli",
+        "OPENCLAW_GATEWAY_PORT": "18789",
+        "OPENCLAW_GATEWAY_TOKEN": "evalscope-local-token",
+        "OPENCLAW_TZ": "UTC",
+        "OPENCLAW_EVAL_STATE_DIR": default_state_dir,
+        "OPENCLAW_EVAL_SECRET_DIR": default_secret_dir,
+        "OPENCLAW_AGENT_ID": "main",
+        "OPENCLAW_EVAL_PROTOCOL": "responses",
+        "OPENCLAW_BRIDGE_HOST_FOR_CONTAINER": "host.docker.internal",
+        "OPENCLAW_AUTO_UP": "true",
+        "OPENCLAW_CLEAN_WORKSPACE": "true",
+        "OPENCLAW_WORKSPACE_PATH": "/home/node/.openclaw/workspace",
+        "OPENCLAW_PRESERVE_WORKSPACE_GIT": "true",
+        "OPENCLAW_WORKSPACE_PRESERVE_EXTRA_ENTRIES": "",
+        "OPENCLAW_WORKSPACE_CLEAN_TIMEOUT": "60",
 
-    # Evaluated model and benchmark.
-    _set_default("EVALSCOPE_DATASET", "mmlu")
-    _set_default("EVALSCOPE_LIMIT", "1")
-    _set_default("EVALSCOPE_MODEL", model_name)
-    _set_default("EVALSCOPE_MODEL_ID", f"openclaw_browsecomp_{_safe_name(model_name)}")
-    _set_default("EVALSCOPE_EVAL_TYPE", "openai_api")
-    _set_default("EVALSCOPE_API_URL", ALIYUNCS_BASE_URL)
-    _set_default("EVALSCOPE_API_KEY", api_key)
-    _set_default("EVALSCOPE_FEW_SHOT_NUM", "0")
-    _set_default("EVALSCOPE_TEMPERATURE", "0.0")
-    _set_default("EVALSCOPE_MAX_TOKENS", "2048")
-    _set_default("EVALSCOPE_AGENT_TIMEOUT", "900")
-    _set_default("EVALSCOPE_WORK_DIR", PROJECT_ROOT / "outputs/openclaw_browsecomp_token_metrics")
+        # EvalScope model, dataset, generation, and runtime.
+        "EVALSCOPE_DATASET": dataset_name,
+        "EVALSCOPE_LIMIT": "1",
+        "EVALSCOPE_MODEL": model_name,
+        "EVALSCOPE_MODEL_ID": f"openclaw_{_safe_name(model_name)}",
+        "EVALSCOPE_EVAL_TYPE": eval_type,
+        "EVALSCOPE_API_URL": ALIYUNCS_BASE_URL,
+        "EVALSCOPE_FEW_SHOT_NUM": "0",
+        "EVALSCOPE_BATCH_SIZE": "1",
+        "EVALSCOPE_TEMPERATURE": "0.0",
+        "EVALSCOPE_MAX_TOKENS": "2048",
+        "EVALSCOPE_STREAM": "false",
+        "EVALSCOPE_AGENT_ENVIRONMENT": "local",
+        "EVALSCOPE_AGENT_TIMEOUT": "900",
+        "EVALSCOPE_BRIDGE_PROXY_HOST": "0.0.0.0",
+        "EVALSCOPE_OUTPUT_ROOT": PROJECT_ROOT / "outputs",
+        "EVALSCOPE_DATASET_HUB": "modelscope",
+        "EVALSCOPE_SEED": "42",
+        "EVALSCOPE_DEBUG": "false",
+        "EVALSCOPE_IGNORE_ERRORS": "false",
+        "EVALSCOPE_RERUN_REVIEW": "false",
+        "EVALSCOPE_NO_TIMESTAMP": "false",
+        "EVALSCOPE_ENABLE_PROGRESS_TRACKER": "false",
 
-    # BrowseComp enables LLM-as-a-Judge in auto mode. The OpenClaw EvalScope
-    # entrypoint reuses the evaluated model unless EVALSCOPE_JUDGE_* overrides
-    # are provided. Judge calls are excluded from harness token totals.
-    _set_default("EVALSCOPE_JUDGE_STRATEGY", "auto")
-    _set_default("EVALSCOPE_JUDGE_MODEL", model_name)
-    _set_default("EVALSCOPE_JUDGE_TEMPERATURE", "0.0")
-    _set_default("EVALSCOPE_JUDGE_MAX_TOKENS", "4096")
-    _set_default("EVALSCOPE_ANALYSIS_REPORT", "false")
+        # Judge configuration. Separate EVALSCOPE_JUDGE_* variables override
+        # the evaluated model; EVALSCOPE_JUDGE_MODEL_ARGS overrides them all.
+        "EVALSCOPE_JUDGE_STRATEGY": "auto",
+        "EVALSCOPE_JUDGE_MODEL": model_name,
+        "EVALSCOPE_JUDGE_EVAL_TYPE": eval_type,
+        "EVALSCOPE_JUDGE_TEMPERATURE": "0.0",
+        "EVALSCOPE_JUDGE_MAX_TOKENS": "4096",
+        "EVALSCOPE_ANALYSIS_REPORT": "false",
+        "EVALSCOPE_COLLECT_PERF": "true",
+    })
 
-    # Enables per-task prediction usage plus dataset-level Total/Avg/Min/Max
-    # token columns in JSON, console output, and report.html.
-    _set_default("EVALSCOPE_COLLECT_PERF", "true")
+    if api_key:
+        _set_default("EVALSCOPE_API_KEY", api_key)
+
+    # Create the effective, possibly overridden bind-mount directories.
+    Path(os.environ["OPENCLAW_EVAL_STATE_DIR"]).expanduser().mkdir(parents=True, exist_ok=True)
+    Path(os.environ["OPENCLAW_EVAL_SECRET_DIR"]).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 def main() -> None:

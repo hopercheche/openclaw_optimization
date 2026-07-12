@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,12 @@ def _env_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _env_number(name: str, default: int | float) -> int | float:
+    raw = os.getenv(name, str(default))
+    value = float(raw)
+    return int(value) if value.is_integer() else value
+
+
 def _env_list(name: str) -> list[str]:
     raw = os.getenv(name, "")
     return [part for part in raw.split(os.pathsep) if part]
@@ -66,6 +73,44 @@ def _env_json_object(name: str) -> dict[str, Any] | None:
     return value
 
 
+def _env_datasets() -> list[str]:
+    raw = os.getenv("EVALSCOPE_DATASETS")
+    if not raw:
+        return [os.getenv("EVALSCOPE_DATASET", "gsm8k")]
+    raw = raw.strip()
+    if raw.startswith("["):
+        value = json.loads(raw)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError("EVALSCOPE_DATASETS must be a JSON string list")
+        return value
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge JSON configuration objects."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _safe_path_component(value: Any) -> str:
+    """Convert a config value into a stable output-directory component."""
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("._-")
+    return text or "unknown"
+
+
+def _default_work_dir(cfg: dict[str, Any]) -> str:
+    output_root = Path(os.getenv("EVALSCOPE_OUTPUT_ROOT", "outputs")).expanduser()
+    model_id = _safe_path_component(cfg.get("model_id", "model"))
+    datasets = cfg.get("datasets") or ["dataset"]
+    dataset_id = "__".join(_safe_path_component(dataset) for dataset in datasets)
+    return str(output_root / f"{model_id}__{dataset_id}")
+
+
 def _default_compose_files() -> list[str]:
     raw = _env_list("OPENCLAW_COMPOSE_FILES")
     if raw:
@@ -76,7 +121,7 @@ def _default_compose_files() -> list[str]:
 def build_task_config() -> dict[str, Any]:
     load_dotenv_file()
 
-    dataset = os.getenv("EVALSCOPE_DATASET", "gsm8k")
+    datasets = _env_datasets()
     model_name = os.getenv("EVALSCOPE_MODEL", "mock")
     eval_type = os.getenv("EVALSCOPE_EVAL_TYPE", "mock_llm")
     api_url = os.getenv("EVALSCOPE_API_URL")
@@ -99,27 +144,27 @@ def build_task_config() -> dict[str, Any]:
         if judge_api_key:
             judge_model_args["api_key"] = judge_api_key
 
-    cfg: dict[str, Any] = {
-        "model": model_name,
-        "model_id": os.getenv("EVALSCOPE_MODEL_ID", "openclaw_cli_harness"),
-        "eval_type": eval_type,
-        "datasets": [dataset],
-        "dataset_args": {
-            dataset: {
-                "few_shot_num": _env_int("EVALSCOPE_FEW_SHOT_NUM", 0),
-            },
-        },
-        "limit": _env_int("EVALSCOPE_LIMIT", 1),
-        "eval_batch_size": 1,
-        "generation_config": {
+    default_dataset_args = {
+        dataset: {"few_shot_num": _env_int("EVALSCOPE_FEW_SHOT_NUM", 0)}
+        for dataset in datasets
+    }
+    dataset_args = _deep_merge(
+        default_dataset_args,
+        _env_json_object("EVALSCOPE_DATASET_ARGS") or {},
+    )
+    generation_config = _deep_merge(
+        {
             "temperature": _env_float("EVALSCOPE_TEMPERATURE", 0.0),
             "max_tokens": _env_int("EVALSCOPE_MAX_TOKENS", 1024),
-            "stream": False,
+            "stream": _env_bool("EVALSCOPE_STREAM", False),
         },
-        "agent_config": {
+        _env_json_object("EVALSCOPE_GENERATION_CONFIG") or {},
+    )
+    agent_config = _deep_merge(
+        {
             "mode": "external",
             "framework": FRAMEWORK_NAME,
-            "environment": "local",
+            "environment": os.getenv("EVALSCOPE_AGENT_ENVIRONMENT", "local"),
             "bridge": {
                 "proxy_host": os.getenv("EVALSCOPE_BRIDGE_PROXY_HOST", "0.0.0.0"),
             },
@@ -132,7 +177,9 @@ def build_task_config() -> dict[str, Any]:
                 "cli_service": os.getenv("OPENCLAW_CLI_SERVICE", "openclaw-cli"),
                 "agent_id": os.getenv("OPENCLAW_AGENT_ID", "main"),
                 "protocol": os.getenv("OPENCLAW_EVAL_PROTOCOL", "responses"),
-                "bridge_host_for_container": os.getenv("OPENCLAW_BRIDGE_HOST_FOR_CONTAINER", "host.docker.internal"),
+                "bridge_host_for_container": os.getenv(
+                    "OPENCLAW_BRIDGE_HOST_FOR_CONTAINER", "host.docker.internal"
+                ),
                 "auto_up": _env_bool("OPENCLAW_AUTO_UP", True),
                 "clean_workspace": _env_bool("OPENCLAW_CLEAN_WORKSPACE", True),
                 "workspace_path": os.getenv("OPENCLAW_WORKSPACE_PATH", "/home/node/.openclaw/workspace"),
@@ -141,12 +188,29 @@ def build_task_config() -> dict[str, Any]:
                 "workspace_clean_timeout_s": _env_float("OPENCLAW_WORKSPACE_CLEAN_TIMEOUT", 60.0),
             },
         },
+        _env_json_object("EVALSCOPE_AGENT_CONFIG") or {},
+    )
+
+    cfg: dict[str, Any] = {
+        "model": model_name,
+        "model_id": os.getenv("EVALSCOPE_MODEL_ID", "openclaw_cli_harness"),
+        "eval_type": eval_type,
+        "datasets": datasets,
+        "dataset_args": dataset_args,
+        "limit": _env_number("EVALSCOPE_LIMIT", 1),
+        "eval_batch_size": _env_int("EVALSCOPE_BATCH_SIZE", 1),
+        "generation_config": generation_config,
+        "agent_config": agent_config,
         "judge_strategy": os.getenv("EVALSCOPE_JUDGE_STRATEGY", "auto"),
         "judge_model_args": judge_model_args,
         "analysis_report": _env_bool("EVALSCOPE_ANALYSIS_REPORT", False),
         "collect_perf": _env_bool("EVALSCOPE_COLLECT_PERF", True),
-        "work_dir": os.getenv("EVALSCOPE_WORK_DIR", "outputs/openclaw_cli_harness"),
         "debug": _env_bool("EVALSCOPE_DEBUG", False),
+        "seed": _env_int("EVALSCOPE_SEED", 42),
+        "ignore_errors": _env_bool("EVALSCOPE_IGNORE_ERRORS", False),
+        "rerun_review": _env_bool("EVALSCOPE_RERUN_REVIEW", False),
+        "no_timestamp": _env_bool("EVALSCOPE_NO_TIMESTAMP", False),
+        "enable_progress_tracker": _env_bool("EVALSCOPE_ENABLE_PROGRESS_TRACKER", False),
     }
 
     dataset_dir = os.getenv("EVALSCOPE_DATASET_DIR")
@@ -159,6 +223,25 @@ def build_task_config() -> dict[str, Any]:
         cfg["dataset_dir"] = dataset_dir
     if dataset_hub:
         cfg["dataset_hub"] = dataset_hub
+
+    use_cache = os.getenv("EVALSCOPE_USE_CACHE")
+    if use_cache:
+        cfg["use_cache"] = use_cache
+
+    judge_worker_num = os.getenv("EVALSCOPE_JUDGE_WORKER_NUM")
+    if judge_worker_num:
+        cfg["judge_worker_num"] = int(judge_worker_num)
+
+    work_dir = os.getenv("EVALSCOPE_WORK_DIR")
+    if work_dir:
+        cfg["work_dir"] = work_dir
+
+    task_config_override = _env_json_object("EVALSCOPE_TASK_CONFIG")
+    if task_config_override:
+        cfg = _deep_merge(cfg, task_config_override)
+
+    if not cfg.get("work_dir"):
+        cfg["work_dir"] = _default_work_dir(cfg)
 
     return cfg
 
