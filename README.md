@@ -1336,9 +1336,9 @@ outputs/openclaw_deepseek-v3.2__gsm8k/20260712_093913/
 EvalScope -> openclaw-cli-harness -> openclaw agent --json -> OpenClaw Gateway -> EvalScope bridge -> model
 ```
 
-以下每个数据集都提供一段完整、独立的启动命令，可以直接粘贴到不同的 tmux 窗口。每段命令都包含
-服务器目录、虚拟环境、独立 Gateway、健康检查、数据集配置和 `python run.py`，不依赖其他窗口中
-已经导出的环境变量。
+以下每个数据集都对应 `Scripts/` 中的一份完整、独立脚本，可以直接在不同的 tmux 窗口运行。脚本内部
+包含 Conda `agentscope` 环境激活、独立 Gateway、健康检查、数据集配置和 `python run.py`，不依赖
+其他窗口中已经导出的 Compose project、端口或 state 目录。
 
 模型、API 地址和 API key 继续从 `.env` 或 `EVALSCOPE_MODEL`、`EVALSCOPE_API_URL`、
 `EVALSCOPE_API_KEY` 读取。建议为同一组 baseline/modified 实验固定相同的模型、seed、生成参数和
@@ -1370,49 +1370,14 @@ Judge 配置，只切换 `OPENCLAW_IMAGE`、`OPENCLAW_COMPOSE_PROJECT` 与 Gatew
 
 ### 14.2 MMLU-Pro：基础知识
 
-先使用 `computer science` 子集验证链路，避免默认同时运行全部 14 个学科：
+脚本默认使用 `computer science` 子集和 `limit=5`，避免第一次运行时同时评测全部 14 个学科：
 
 ```bash
 cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
-PROJECT_ROOT="$(pwd -P)"
-source "$PROJECT_ROOT/.venv/bin/activate"
-
-export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
-export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-mmlu-pro
-export OPENCLAW_GATEWAY_PORT=18801
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/mmlu-pro/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/mmlu-pro/secrets"
-export OPENCLAW_AUTO_UP=false
-
-export EVALSCOPE_DATASETS=
-export EVALSCOPE_TASK_CONFIG=
-export EVALSCOPE_WORK_DIR=
-export EVALSCOPE_OUTPUT_ROOT="$PROJECT_ROOT/outputs/parallel"
-export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
-export EVALSCOPE_DATASET=mmlu_pro
-export EVALSCOPE_DATASET_ARGS='{
-  "mmlu_pro": {
-    "subset_list": ["computer science"],
-    "few_shot_num": 0
-  }
-}'
-export EVALSCOPE_LIMIT=5
-export EVALSCOPE_JUDGE_STRATEGY=rule
-export EVALSCOPE_BATCH_SIZE=1
-
-mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
-
-docker compose \
-  -f "$PROJECT_ROOT/openclaw_evalscope_cli/docker-compose.evalscope.yml" \
-  -p "$OPENCLAW_COMPOSE_PROJECT" \
-  up -d --wait --wait-timeout 180 openclaw-gateway
-
-curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
-
-python run.py
+bash Scripts/mmlu_pro.sh
 ```
 
-正式评测全部学科时删除 `subset_list`，或显式填写：`computer science`、`math`、`chemistry`、
+正式评测全部学科时修改 `Scripts/mmlu_pro.sh` 中的 `subset_list`，或显式填写：`computer science`、`math`、`chemistry`、
 `engineering`、`law`、`biology`、`health`、`physics`、`business`、`philosophy`、`economics`、
 `other`、`psychology`、`history`。
 
@@ -1422,41 +1387,7 @@ GPQA-Diamond 没有额外 subset，默认使用 0-shot 和规则准确率：
 
 ```bash
 cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
-PROJECT_ROOT="$(pwd -P)"
-source "$PROJECT_ROOT/.venv/bin/activate"
-
-export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
-export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-gpqa
-export OPENCLAW_GATEWAY_PORT=18802
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/gpqa/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/gpqa/secrets"
-export OPENCLAW_AUTO_UP=false
-
-export EVALSCOPE_DATASETS=
-export EVALSCOPE_TASK_CONFIG=
-export EVALSCOPE_WORK_DIR=
-export EVALSCOPE_OUTPUT_ROOT="$PROJECT_ROOT/outputs/parallel"
-export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
-export EVALSCOPE_DATASET=gpqa_diamond
-export EVALSCOPE_DATASET_ARGS='{
-  "gpqa_diamond": {
-    "few_shot_num": 0
-  }
-}'
-export EVALSCOPE_LIMIT=5
-export EVALSCOPE_JUDGE_STRATEGY=rule
-export EVALSCOPE_BATCH_SIZE=1
-
-mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
-
-docker compose \
-  -f "$PROJECT_ROOT/openclaw_evalscope_cli/docker-compose.evalscope.yml" \
-  -p "$OPENCLAW_COMPOSE_PROJECT" \
-  up -d --wait --wait-timeout 180 openclaw-gateway
-
-curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
-
-python run.py
+bash Scripts/gpqa_diamond.sh
 ```
 
 ### 14.4 LongMemEval：多轮对话近似项
@@ -1466,48 +1397,7 @@ Judge；Judge 默认复用被评测模型，也可以使用第 13.1 节的环境
 
 ```bash
 cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
-PROJECT_ROOT="$(pwd -P)"
-source "$PROJECT_ROOT/.venv/bin/activate"
-
-export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
-export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-longmemeval
-export OPENCLAW_GATEWAY_PORT=18803
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/longmemeval/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/longmemeval/secrets"
-export OPENCLAW_AUTO_UP=false
-
-export EVALSCOPE_DATASETS=
-export EVALSCOPE_TASK_CONFIG=
-export EVALSCOPE_WORK_DIR=
-export EVALSCOPE_OUTPUT_ROOT="$PROJECT_ROOT/outputs/parallel"
-export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
-export EVALSCOPE_DATASET=longmemeval
-export EVALSCOPE_DATASET_ARGS='{
-  "longmemeval": {
-    "subset_list": ["s"],
-    "few_shot_num": 0,
-    "extra_params": {
-      "eval_mode": "long_context",
-      "history_format": "json",
-      "reading_method": "con",
-      "topk_context": 1000
-    }
-  }
-}'
-export EVALSCOPE_LIMIT=1
-export EVALSCOPE_JUDGE_STRATEGY=auto
-export EVALSCOPE_BATCH_SIZE=1
-
-mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
-
-docker compose \
-  -f "$PROJECT_ROOT/openclaw_evalscope_cli/docker-compose.evalscope.yml" \
-  -p "$OPENCLAW_COMPOSE_PROJECT" \
-  up -d --wait --wait-timeout 180 openclaw-gateway
-
-curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
-
-python run.py
+bash Scripts/longmemeval.sh
 ```
 
 这条命令测试的是一次 OpenClaw 任务读取完整历史后的回答，不是 EvalScope 与 OpenClaw 之间逐轮发送
@@ -1521,42 +1411,7 @@ python run.py
 
 ```bash
 cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
-PROJECT_ROOT="$(pwd -P)"
-source "$PROJECT_ROOT/.venv/bin/activate"
-
-export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
-export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-acebench
-export OPENCLAW_GATEWAY_PORT=18804
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/acebench/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/acebench/secrets"
-export OPENCLAW_AUTO_UP=false
-
-export EVALSCOPE_DATASETS=
-export EVALSCOPE_TASK_CONFIG=
-export EVALSCOPE_WORK_DIR=
-export EVALSCOPE_OUTPUT_ROOT="$PROJECT_ROOT/outputs/parallel"
-export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
-export EVALSCOPE_DATASET=acebench
-export EVALSCOPE_DATASET_ARGS='{
-  "acebench": {
-    "subset_list": ["agent"],
-    "few_shot_num": 0
-  }
-}'
-export EVALSCOPE_LIMIT=5
-export EVALSCOPE_JUDGE_STRATEGY=rule
-export EVALSCOPE_BATCH_SIZE=1
-
-mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
-
-docker compose \
-  -f "$PROJECT_ROOT/openclaw_evalscope_cli/docker-compose.evalscope.yml" \
-  -p "$OPENCLAW_COMPOSE_PROJECT" \
-  up -d --wait --wait-timeout 180 openclaw-gateway
-
-curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
-
-python run.py
+bash Scripts/acebench.sh
 ```
 
 OpenClaw 应按 prompt 要求输出调用列表，例如 `[ApiName(key="value")]`。该 adapter 会比较调用过程
@@ -1568,45 +1423,7 @@ LoCoMo 的 `qa` 子集把带日期的多 session 对话历史和问题交给 Ope
 
 ```bash
 cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
-PROJECT_ROOT="$(pwd -P)"
-source "$PROJECT_ROOT/.venv/bin/activate"
-
-export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
-export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-locomo
-export OPENCLAW_GATEWAY_PORT=18805
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/locomo/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel/locomo/secrets"
-export OPENCLAW_AUTO_UP=false
-
-export EVALSCOPE_DATASETS=
-export EVALSCOPE_TASK_CONFIG=
-export EVALSCOPE_WORK_DIR=
-export EVALSCOPE_OUTPUT_ROOT="$PROJECT_ROOT/outputs/parallel"
-export EVALSCOPE_MODEL_ID=openclaw_baseline_deepseek_v32
-export EVALSCOPE_DATASET=locomo
-export EVALSCOPE_DATASET_ARGS='{
-  "locomo": {
-    "subset_list": ["qa"],
-    "few_shot_num": 0,
-    "extra_params": {
-      "eval_mode": "long_context"
-    }
-  }
-}'
-export EVALSCOPE_LIMIT=1
-export EVALSCOPE_JUDGE_STRATEGY=rule
-export EVALSCOPE_BATCH_SIZE=1
-
-mkdir -p "$OPENCLAW_EVAL_STATE_DIR" "$OPENCLAW_EVAL_SECRET_DIR"
-
-docker compose \
-  -f "$PROJECT_ROOT/openclaw_evalscope_cli/docker-compose.evalscope.yml" \
-  -p "$OPENCLAW_COMPOSE_PROJECT" \
-  up -d --wait --wait-timeout 180 openclaw-gateway
-
-curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
-
-python run.py
+bash Scripts/locomo.sh
 ```
 
 `oracle_context` 只保留答案证据，可用于验证 prompt、runner 和评分链路；正式比较 OpenClaw 的长期
@@ -1614,18 +1431,27 @@ python run.py
 
 ### 14.7 tmux 并行运行
 
-先创建一个 tmux session，并为五个数据集建立独立窗口：
+以下命令会直接创建五个窗口并在各窗口中运行对应脚本：
 
 ```bash
-tmux new-session -d -s openclaw-evals -n mmlu-pro
-tmux new-window -t openclaw-evals -n gpqa
-tmux new-window -t openclaw-evals -n longmemeval
-tmux new-window -t openclaw-evals -n acebench
-tmux new-window -t openclaw-evals -n locomo
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+tmux new-session -d -s openclaw-evals -n mmlu-pro \
+  "cd '$PWD' && bash Scripts/mmlu_pro.sh"
+tmux new-window -t openclaw-evals -n gpqa \
+  "cd '$PWD' && bash Scripts/gpqa_diamond.sh"
+tmux new-window -t openclaw-evals -n longmemeval \
+  "cd '$PWD' && bash Scripts/longmemeval.sh"
+tmux new-window -t openclaw-evals -n acebench \
+  "cd '$PWD' && bash Scripts/acebench.sh"
+tmux new-window -t openclaw-evals -n locomo \
+  "cd '$PWD' && bash Scripts/locomo.sh"
+tmux set-option -t openclaw-evals remain-on-exit on
 tmux attach -t openclaw-evals
 ```
 
-进入对应窗口后，直接粘贴该数据集章节中的完整代码块。常用命令：
+脚本会自行初始化 Conda 并执行 `conda activate agentscope`。如果环境名称不同，可以在启动前设置
+`CONDA_ENV_NAME`。常用命令：
 
 ```bash
 tmux attach -t openclaw-evals
@@ -1637,16 +1463,23 @@ tmux list-windows -t openclaw-evals
 
 ### 14.8 Baseline 与 Modified 对比
 
-上面的五组命令默认运行 baseline。运行 modified 时，在对应数据集代码块中替换：
+上面的五组脚本默认运行 baseline。下面以 MMLU-Pro 为例运行 modified 镜像：
 
 ```bash
-export OPENCLAW_IMAGE=openclaw-modified:<experiment-id>
-export OPENCLAW_COMPOSE_PROJECT=<原项目名>-modified
-export OPENCLAW_GATEWAY_PORT=<18901 到 18905 中对应的端口>
-export OPENCLAW_EVAL_STATE_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel-modified/<dataset>/state"
-export OPENCLAW_EVAL_SECRET_DIR="$PROJECT_ROOT/openclaw_evalscope_cli/.openclaw-eval/parallel-modified/<dataset>/secrets"
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+export OPENCLAW_IMAGE=openclaw-modified:experiment-v1
+export OPENCLAW_SCRIPT_COMPOSE_PROJECT=openclaw-eval-mmlu-pro-modified
+export OPENCLAW_SCRIPT_GATEWAY_PORT=18901
+export OPENCLAW_SCRIPT_STATE_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/parallel-modified/mmlu-pro/state"
+export OPENCLAW_SCRIPT_SECRET_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/parallel-modified/mmlu-pro/secrets"
 export EVALSCOPE_MODEL_ID=openclaw_modified_deepseek_v32
+
+bash Scripts/mmlu_pro.sh
 ```
+
+其他数据集使用对应脚本，并把 project、端口和目录中的数据集名称一并替换。脚本专用的
+`OPENCLAW_SCRIPT_*` 变量用于覆盖默认隔离配置，不会与其他 tmux 窗口的默认配置混淆。
 
 建议 modified 使用以下端口：
 
