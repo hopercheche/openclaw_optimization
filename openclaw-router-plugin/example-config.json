@@ -1,0 +1,13 @@
+{
+  "plugins": {
+    "openclaw-router-plugin": {
+      "endpoint": "https://your-router-api.com/predict",
+      "apiKey": "your-api-key",
+      "models": {
+        "small": "openai/gpt-4o-mini",
+        "mid": "openai/gpt-4o",
+        "large": "openai/gpt-4o-turbo"
+      }
+    }
+  }
+}

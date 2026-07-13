@@ -1,0 +1,33 @@
+{
+  "name": "openclaw-router-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw LLM Router Plugin - Route LLM requests to small/mid/large models based on external router API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "openclaw-plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "prepare": "npm run build",
+    "start-mock": "node --experimental-vm-modules mock-router/server.js",
+    "test": "node --experimental-vm-modules mock-router/test.js"
+  },
+  "dependencies": {
+    "openclaw/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "llm",
+    "router"
+  ],
+  "author": "",
+  "license": "MIT"
+}

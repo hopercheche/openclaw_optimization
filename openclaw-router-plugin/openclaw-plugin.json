@@ -1,0 +1,54 @@
+{
+  "$schema": "https://raw.githubusercontent.com/openclaw/openclaw/main/plugins/manifest.schema.json",
+  "id": "openclaw-router",
+  "name": "OpenClaw Router",
+  "description": "Routes LLM requests to small/mid/large models based on external router API",
+  "version": "1.0.0",
+  "entry": "./dist/index.js",
+  "kind": "plugin",
+  "author": "",
+  "license": "MIT",
+  "permissions": [
+    "network"
+  ],
+  "config": {
+    "type": "object",
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "title": "Router Endpoint",
+        "description": "URL of the external LLM Router API (without /predict)"
+      },
+      "apiKey": {
+        "type": "string",
+        "title": "API Key",
+        "description": "Optional API key for the Router API",
+        "secret": true
+      },
+      "models": {
+        "type": "object",
+        "title": "Target Models",
+        "description": "Model mappings for small/mid/large tiers",
+        "properties": {
+          "small": {
+            "type": "string",
+            "title": "Small Model",
+            "description": "Model ID for small tier routing"
+          },
+          "mid": {
+            "type": "string",
+            "title": "Mid Model",
+            "description": "Model ID for mid tier routing"
+          },
+          "large": {
+            "type": "string",
+            "title": "Large Model",
+            "description": "Model ID for large tier routing"
+          }
+        },
+        "required": ["small", "mid", "large"]
+      }
+    },
+    "required": ["endpoint", "models"]
+  }
+}
