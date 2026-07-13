@@ -1528,3 +1528,66 @@ do
     down
 done
 ```
+
+## 15. 实验 JSON 报告与费用估算
+
+所有通过 `python run.py` 或 `Scripts/*.sh` 启动的评测，在结束后都会额外生成：
+
+```text
+outputs/<model_id>__<dataset>/<timestamp>/experiment_report.json
+```
+
+报告包含：
+
+- `task_config`：最终生效且已脱敏的 EvalScope、OpenClaw runner、数据集和生成配置。
+- `runtime`：OpenClaw 镜像、Compose project、Gateway 端口和协议等实验环境。
+- `results.dataset_reports`：EvalScope 每数据集聚合分数。
+- `results.task_results`：每条任务的 target、prediction、抽取答案、score、usage、耗时和金额估算。
+- `usage`：被评测 OpenClaw harness 的总 input/output/total token。
+- `cost_estimate`：总费用以及每任务平均、最小和最大费用。
+- `artifacts`：原始 predictions、reviews、reports、config 和日志文件路径。
+
+API key、Gateway token 和 Judge key 不写入报告。若评测中途失败，入口会尽量生成
+`status="failed"` 的部分报告并记录错误类型和信息。
+
+### 15.1 配置模型价格
+
+总 token 本身不能直接代表金额，因为输入、输出和缓存 token 可能采用不同单价。运行前按照供应商实际
+计价配置每百万 token 单价：
+
+```bash
+export EVALSCOPE_COST_CURRENCY=CNY
+export EVALSCOPE_INPUT_PRICE_PER_MILLION=2.0
+export EVALSCOPE_OUTPUT_PRICE_PER_MILLION=8.0
+
+# 只有供应商明确提供缓存输入折扣时才设置；否则按普通输入价格估算。
+export EVALSCOPE_CACHED_INPUT_PRICE_PER_MILLION=0.4
+
+bash Scripts/acebench.sh
+```
+
+上面的数字只是配置格式示例，不是任何具体模型的官方价格。应按 `EVALSCOPE_MODEL` 在实际 API
+供应商、套餐或 token-plan 中对应的价格填写。未同时设置输入和输出价格时，报告仍生成 token 数据，但：
+
+```json
+{
+  "cost_estimate": {
+    "status": "unavailable"
+  }
+}
+```
+
+### 15.2 金额口径
+
+估算公式为：
+
+```text
+input_cost = 非缓存输入 token / 1,000,000 * 输入单价
+cached_input_cost = 缓存输入 token / 1,000,000 * 缓存输入单价
+output_cost = 输出 token / 1,000,000 * 输出单价
+total_cost = input_cost + cached_input_cost + output_cost
+```
+
+当前金额只统计被评测 OpenClaw harness 通过 EvalScope bridge 发起的模型调用，不包含 LLM Judge、
+`analysis_report`、搜索或其他工具服务费用、税费、套餐抵扣和供应商阶梯折扣。因此它是可复现的模型调用
+费用估算，不是供应商最终账单；需要精确实付金额时应以供应商账单或 billing API 为准。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,10 @@ try:
     from evalscope import run_task
 except ImportError:
     from evalscope.evalscope import run_task
+from evalscope.config import parse_task_config
 
 from openclaw_evalscope_cli.constants import FRAMEWORK_NAME
+from openclaw_evalscope_cli.experiment_report import generate_experiment_report
 import openclaw_evalscope_cli.runner  # noqa: F401  register custom runner
 
 
@@ -247,7 +250,30 @@ def build_task_config() -> dict[str, Any]:
 
 
 def main() -> None:
-    run_task(build_task_config())
+    task_config = parse_task_config(build_task_config())
+    started_at = datetime.now(timezone.utc)
+    try:
+        run_task(task_config)
+    except Exception as exc:
+        finished_at = datetime.now(timezone.utc)
+        report_path = generate_experiment_report(
+            task_config=task_config,
+            status="failed",
+            started_at=started_at,
+            finished_at=finished_at,
+            error=exc,
+        )
+        print(f"Experiment JSON report: {report_path}")
+        raise
+    else:
+        finished_at = datetime.now(timezone.utc)
+        report_path = generate_experiment_report(
+            task_config=task_config,
+            status="completed",
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        print(f"Experiment JSON report: {report_path}")
 
 
 if __name__ == "__main__":
