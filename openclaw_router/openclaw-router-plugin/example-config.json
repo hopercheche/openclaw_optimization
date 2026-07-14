@@ -1,0 +1,35 @@
+{
+  "plugins": {
+    "load": {
+      "paths": [
+        "/opt/openclaw-plugins/openclaw-router"
+      ]
+    },
+    "allow": [
+      "openclaw-router",
+      "diagnostics-prometheus"
+    ],
+    "entries": {
+      "openclaw-router": {
+        "enabled": true,
+        "config": {
+          "endpoint": "http://openclaw-router-api:3000",
+          "confidenceThreshold": 0.5,
+          "requestTimeoutMs": 5000,
+          "strict": true,
+          "tiers": {
+            "small": "small-model",
+            "mid": "mid-model",
+            "large": "large-model"
+          }
+        }
+      },
+      "diagnostics-prometheus": {
+        "enabled": true
+      }
+    }
+  },
+  "diagnostics": {
+    "enabled": true
+  }
+}

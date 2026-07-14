@@ -1,0 +1,61 @@
+# The Strategist MVP — 三模型池配置
+# 成本系数用于评估 token 成本（相对 small 模型）
+
+models:
+  small:
+    name: gpt-4o-mini
+    cost_per_1k_tokens: 0.15   # USD, input+output 估算
+    cost_multiplier: 1.0
+    description: "低成本快速响应 (7B-14B 级别)"
+
+  mid:
+    name: gpt-4o
+    cost_per_1k_tokens: 2.50
+    cost_multiplier: 5.0
+    description: "成本与质量平衡 (13B-32B 级别)"
+
+  large:
+    name: gpt-4
+    cost_per_1k_tokens: 10.0
+    cost_multiplier: 20.0
+    description: "高质量推理 (70B+ / GPT-4 级别)"
+
+router:
+  # 规则路由阈值
+  length_thresholds:
+    short: 100      # chars — 倾向 small
+    medium: 500     # chars — 倾向 mid
+    # > medium — 倾向 large
+
+  complexity_thresholds:
+    low: 2
+    medium: 5
+    # score >= medium → large
+
+  reasoning_keywords:
+    - why
+    - prove
+    - compare
+    - explain
+    - analyze
+    - evaluate
+    - derive
+    - justify
+    - discuss
+    - contrast
+    - argue
+    - synthesize
+    - critique
+    - 为什么
+    - 证明
+    - 比较
+    - 分析
+    - 解释
+    - 推导
+    - 论证
+
+  # 路由决策权重
+  weights:
+    keyword: 0.4
+    length: 0.3
+    complexity: 0.3

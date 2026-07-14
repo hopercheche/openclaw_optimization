@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-REPORT_SCHEMA_VERSION = "1.0"
+REPORT_SCHEMA_VERSION = "1.1"
 REPORT_FILENAME = "experiment_report.json"
 _MILLION = Decimal(1_000_000)
 _SENSITIVE_KEYS = {
@@ -57,8 +57,11 @@ def generate_experiment_report(
     )
 
     pricing = _load_pricing()
+    router_pricing = _load_router_pricing()
     usage_summary = _summarize_usage(task_results)
-    cost_summary = _apply_costs(task_results, usage_summary, pricing)
+    cost_summary = _apply_costs(task_results, usage_summary, pricing, router_pricing)
+    routing_summary = _summarize_routing(task_results)
+    runtime_metrics = _summarize_runtime_metrics(task_results)
 
     config_dict = task_config.to_dict() if hasattr(task_config, "to_dict") else task_config
     payload = {
@@ -74,6 +77,8 @@ def generate_experiment_report(
             "task_results": task_results,
         },
         "usage": usage_summary,
+        "routing": routing_summary,
+        "openclaw_runtime_metrics": runtime_metrics,
         "cost_estimate": cost_summary,
         "artifacts": {
             key: [_relative(path, work_dir) for path in paths]
@@ -157,6 +162,8 @@ def _compact_task_result(identity: dict[str, Any], record: dict[str, Any]) -> di
     model_output = record.get("model_output") or {}
     score_wrapper = ((record.get("sample_score") or {}).get("score") or {})
     usage = _extract_usage(record)
+    model_calls = _extract_model_calls(record)
+    runner_metrics = _extract_runner_metrics(record)
     return {
         **identity,
         "sample_id": (record.get("sample_score") or {}).get("sample_id", record.get("index")),
@@ -170,9 +177,48 @@ def _compact_task_result(identity: dict[str, Any], record: dict[str, Any]) -> di
         "score_explanation": score_wrapper.get("explanation"),
         "sample_metadata": (record.get("sample_score") or {}).get("sample_metadata"),
         "usage": usage,
+        "model_calls": model_calls,
+        "runner_metrics": runner_metrics,
         "latency_seconds": _latency_seconds(record),
         "error": model_output.get("error"),
     }
+
+
+def _extract_model_calls(record: dict[str, Any]) -> list[dict[str, Any]]:
+    calls = []
+    for event in (record.get("agent_trace") or {}).get("events") or []:
+        if event.get("type") != "model_generate":
+            continue
+        payload = event.get("payload") or {}
+        usage = event.get("token_usage") or {}
+        calls.append({
+            "step": event.get("step"),
+            "requested_model": payload.get("requested_model"),
+            "resolved_model": payload.get("resolved_model"),
+            "latency_ms": event.get("latency_ms"),
+            "usage": {
+                "input_tokens": _as_int(usage.get("input"), 0),
+                "output_tokens": _as_int(usage.get("output"), 0),
+                "total_tokens": _as_int(usage.get("input"), 0) + _as_int(usage.get("output"), 0),
+                "cached_input_tokens": _as_int(usage.get("cache_read"), 0),
+                "cache_write_tokens": _as_int(usage.get("cache_write"), 0),
+                "reasoning_tokens": _as_int(usage.get("reasoning"), 0),
+            },
+        })
+    return calls
+
+
+def _extract_runner_metrics(record: dict[str, Any]) -> dict[str, Any] | None:
+    model_output = record.get("model_output") or {}
+    metadata_metrics = (model_output.get("metadata") or {}).get("runner_metrics")
+    if isinstance(metadata_metrics, dict):
+        return metadata_metrics
+    for event in reversed((record.get("agent_trace") or {}).get("events") or []):
+        if event.get("type") != "run_end":
+            continue
+        metrics = (event.get("payload") or {}).get("runner_metrics")
+        return metrics if isinstance(metrics, dict) else None
+    return None
 
 
 def _extract_usage(record: dict[str, Any]) -> dict[str, int] | None:
@@ -239,11 +285,53 @@ def _load_pricing() -> dict[str, Any] | None:
     }
 
 
+def _load_router_pricing() -> dict[str, dict[str, Any]]:
+    raw = os.getenv("EVALSCOPE_ROUTER_MODEL_ROUTES")
+    if not raw:
+        return {}
+    try:
+        routes = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"EVALSCOPE_ROUTER_MODEL_ROUTES must be valid JSON: {exc}") from exc
+    if not isinstance(routes, dict):
+        return {}
+
+    pricing: dict[str, dict[str, Any]] = {}
+    currency = os.getenv("EVALSCOPE_COST_CURRENCY", "USD")
+    for request_model, route in routes.items():
+        if not isinstance(route, dict):
+            continue
+        model_config = route.get("openclaw_model") or {}
+        cost = model_config.get("cost") if isinstance(model_config, dict) else None
+        if not isinstance(cost, dict):
+            continue
+        try:
+            values = {
+                "input_per_million": Decimal(str(cost.get("input", 0))),
+                "output_per_million": Decimal(str(cost.get("output", 0))),
+                "cached_input_per_million": Decimal(str(cost.get("cacheRead", 0))),
+                "cache_write_per_million": Decimal(str(cost.get("cacheWrite", 0))),
+            }
+        except InvalidOperation as exc:
+            raise ValueError(f"invalid router pricing for {request_model!r}") from exc
+        if min(values.values()) < 0:
+            raise ValueError(f"router pricing cannot be negative for {request_model!r}")
+        pricing[str(request_model)] = {
+            "currency": currency,
+            "cached_price_explicit": True,
+            **values,
+        }
+    return pricing
+
+
 def _apply_costs(
     task_results: list[dict[str, Any]],
     usage_summary: dict[str, Any],
     pricing: dict[str, Any] | None,
+    router_pricing: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
+    if router_pricing:
+        return _apply_router_costs(task_results, router_pricing)
     if pricing is None:
         return {
             "status": "unavailable",
@@ -286,6 +374,110 @@ def _apply_costs(
     }
 
 
+def _apply_router_costs(
+    task_results: list[dict[str, Any]],
+    router_pricing: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    task_costs: list[Decimal] = []
+    model_totals: dict[str, Decimal] = {}
+    n_calls_priced = 0
+    for task in task_results:
+        call_costs = []
+        task_total = Decimal(0)
+        for call in task.get("model_calls") or []:
+            model = call.get("requested_model") or call.get("resolved_model")
+            model_price = router_pricing.get(str(model))
+            if model_price is None:
+                call["cost_estimate"] = None
+                continue
+            cost = _calculate_cost(call.get("usage") or {}, model_price)
+            cache_write_tokens = Decimal(_as_int((call.get("usage") or {}).get("cache_write_tokens"), 0))
+            cache_write_cost = cache_write_tokens * model_price["cache_write_per_million"] / _MILLION
+            total = Decimal(str(cost["total_cost"])) + cache_write_cost
+            cost["cache_write_cost"] = _money(cache_write_cost)
+            cost["total_cost"] = _money(total)
+            cost["model"] = model
+            call["cost_estimate"] = cost
+            call_costs.append(cost)
+            task_total += total
+            model_totals[str(model)] = model_totals.get(str(model), Decimal(0)) + total
+            n_calls_priced += 1
+        task["model_costs"] = call_costs
+        task["cost_estimate"] = {
+            "currency": next(iter(router_pricing.values()))["currency"],
+            "total_cost": _money(task_total),
+        } if call_costs else None
+        if call_costs:
+            task_costs.append(task_total)
+
+    total = sum(task_costs, Decimal(0))
+    return {
+        "status": "estimated",
+        "estimated": True,
+        "source": "per_model_bridge_trace",
+        "currency": next(iter(router_pricing.values()))["currency"],
+        "n_tasks_priced": len(task_costs),
+        "n_model_calls_priced": n_calls_priced,
+        "total_cost": _money(total),
+        "mean_cost_per_task": _money(total / len(task_costs)) if task_costs else None,
+        "min_cost_per_task": _money(min(task_costs)) if task_costs else None,
+        "max_cost_per_task": _money(max(task_costs)) if task_costs else None,
+        "cost_by_model": {model: _money(value) for model, value in sorted(model_totals.items())},
+        "pricing_per_million_tokens": {
+            model: {
+                "input": _number(price["input_per_million"]),
+                "output": _number(price["output_per_million"]),
+                "cache_read": _number(price["cached_input_per_million"]),
+                "cache_write": _number(price["cache_write_per_million"]),
+            }
+            for model, price in sorted(router_pricing.items())
+        },
+        "limitations": _cost_limitations(cached_price_explicit=True),
+    }
+
+
+def _summarize_routing(task_results: list[dict[str, Any]]) -> dict[str, Any]:
+    raw_tiers = os.getenv("OPENCLAW_ROUTER_TIERS")
+    try:
+        tiers = json.loads(raw_tiers) if raw_tiers else {}
+    except json.JSONDecodeError:
+        tiers = {}
+    model_to_tier = {str(model): str(tier) for tier, model in tiers.items()} if isinstance(tiers, dict) else {}
+    by_model: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    total_calls = 0
+    for task in task_results:
+        for call in task.get("model_calls") or []:
+            model = str(call.get("requested_model") or call.get("resolved_model") or "unknown")
+            tier = model_to_tier.get(model, "unknown")
+            by_model[model] = by_model.get(model, 0) + 1
+            by_tier[tier] = by_tier.get(tier, 0) + 1
+            total_calls += 1
+    return {
+        "n_model_calls": total_calls,
+        "calls_by_model": dict(sorted(by_model.items())),
+        "calls_by_tier": dict(sorted(by_tier.items())),
+    }
+
+
+def _summarize_runtime_metrics(task_results: list[dict[str, Any]]) -> dict[str, Any]:
+    series: dict[str, float] = {}
+    tasks_with_metrics = 0
+    for task in task_results:
+        metrics = task.get("runner_metrics") or {}
+        delta = metrics.get("openclaw_prometheus_delta")
+        if not isinstance(delta, dict):
+            continue
+        tasks_with_metrics += 1
+        for name, value in delta.items():
+            if isinstance(value, (int, float)):
+                series[name] = series.get(name, 0.0) + float(value)
+    return {
+        "n_tasks_with_metrics": tasks_with_metrics,
+        "prometheus_counter_delta": dict(sorted(series.items())),
+    }
+
+
 def _calculate_cost(usage: dict[str, Any], pricing: dict[str, Any]) -> dict[str, Any]:
     input_tokens = Decimal(_as_int(usage.get("input_tokens"), 0))
     output_tokens = Decimal(_as_int(usage.get("output_tokens"), 0))
@@ -316,6 +508,11 @@ def _cost_limitations(cached_price_explicit: bool) -> list[str]:
 def _runtime_metadata() -> dict[str, Any]:
     names = [
         "OPENCLAW_IMAGE",
+        "OPENCLAW_ROUTER_ENABLED",
+        "OPENCLAW_ROUTER_GATEWAY_IMAGE",
+        "OPENCLAW_ROUTER_API_IMAGE",
+        "OPENCLAW_ROUTER_EMBEDDING_MODE",
+        "OPENCLAW_ROUTER_CONFIDENCE_THRESHOLD",
         "OPENCLAW_COMPOSE_PROJECT",
         "OPENCLAW_GATEWAY_PORT",
         "OPENCLAW_AGENT_ID",

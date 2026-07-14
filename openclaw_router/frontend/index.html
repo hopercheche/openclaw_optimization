@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClawPOpti Audit Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>OpenClawPOpti</h1>
+          <p>AS2 Audit Console</p>
+        </div>
+        <div class="status-pill" id="healthStatus">Checking API</div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar" aria-label="Runs">
+          <div class="field-group">
+            <label for="apiBase">API</label>
+            <input id="apiBase" type="url" value="http://127.0.0.1:8787" />
+          </div>
+          <div class="field-group">
+            <label for="permissionMode">Mode</label>
+            <select id="permissionMode">
+              <option value="DEFAULT">DEFAULT</option>
+              <option value="EXPLORE">EXPLORE</option>
+              <option value="ACCEPT_EDITS">ACCEPT_EDITS</option>
+              <option value="DONT_ASK">DONT_ASK</option>
+              <option value="BYPASS">BYPASS</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="goalInput">Goal</label>
+            <textarea id="goalInput" rows="8">Build an audit-first agent plan for a workspace automation task.</textarea>
+          </div>
+          <button class="primary-button" id="startRun" type="button">
+            <span class="button-icon" aria-hidden="true">▶</span>
+            <span>Start Run</span>
+          </button>
+
+          <section class="run-list-section">
+            <div class="section-title">
+              <h2>Runs</h2>
+              <button class="icon-button" id="refreshRuns" type="button" aria-label="Refresh runs">↻</button>
+            </div>
+            <div class="run-list" id="runList"></div>
+          </section>
+        </aside>
+
+        <section class="main-panel">
+          <div class="run-header">
+            <div>
+              <h2 id="activeRunTitle">No run selected</h2>
+              <p id="activeRunMeta">Create a run to stream planner events.</p>
+            </div>
+            <div class="run-actions">
+              <button class="secondary-button" id="loadAudit" type="button" disabled>
+                <span class="button-icon" aria-hidden="true">▣</span>
+                <span>Audit</span>
+              </button>
+              <button class="secondary-button" id="reconnectStream" type="button" disabled>
+                <span class="button-icon" aria-hidden="true">⇄</span>
+                <span>Stream</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="content-grid">
+            <section class="timeline-panel" aria-label="Event timeline">
+              <div class="section-title">
+                <h2>Timeline</h2>
+                <span id="eventCount">0 events</span>
+              </div>
+              <div class="timeline" id="timeline"></div>
+            </section>
+
+            <section class="audit-panel" aria-label="Audit report">
+              <div class="section-title">
+                <h2>Audit</h2>
+                <span id="auditState">Not loaded</span>
+              </div>
+              <pre id="auditOutput"></pre>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>
+

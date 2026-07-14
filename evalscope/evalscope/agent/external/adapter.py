@@ -11,6 +11,7 @@ benchmark's prediction artifact (e.g. ``git diff``) from the sandbox
 before it is closed.
 """
 
+import os
 import platform
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 from evalscope.api.agent import AgentEnvironment, AgentTrace
 from evalscope.api.evaluator import InferenceResult
 from evalscope.api.messages import ChatMessageAssistant, ChatMessageSystem, ChatMessageUser, PerformanceMetrics
-from evalscope.api.model import Model, ModelOutput, ModelUsage
+from evalscope.api.model import GenerateConfig, Model, ModelOutput, ModelUsage, get_model
 from evalscope.api.model.model_output import ChatCompletionChoice
 from evalscope.api.registry import get_environment
 from evalscope.utils.function_utils import AsyncioLoopRunner
@@ -127,7 +128,13 @@ async def _run_async(
         port=config.bridge.proxy_port,
     )
 
-    async with proxy.trial_session(model=model, framework=config.framework) as session:
+    model_routes = _build_bridge_model_routes(config)
+    async with proxy.trial_session(
+        model=model,
+        framework=config.framework,
+        model_routes=model_routes,
+        strict_model_routing=config.bridge.strict_model_routing,
+    ) as session:
         task = ExternalAgentTask(
             instruction=instruction,
             timeout=config.timeout,
@@ -143,6 +150,7 @@ async def _run_async(
             run_returncode = -1
             run_timed_out = False
             run_wall_time = 0.0
+            run_metrics: Dict[str, Any] = {}
             try:
                 await runner.setup(env)
                 result = await runner.run(
@@ -151,6 +159,7 @@ async def _run_async(
                     bridge=session.endpoint_view(for_env=env),
                 )
                 run_returncode = int(result.metrics.get('returncode', 0))
+                run_metrics = dict(result.metrics)
             except RunnerTimeoutError as exc:
                 run_error = repr(exc)
                 run_timed_out = True
@@ -165,6 +174,7 @@ async def _run_async(
                     timed_out=run_timed_out,
                     wall_time=run_wall_time,
                     error=run_error,
+                    metrics=run_metrics,
                 )
 
             # Run the post-run hook inside the env context so adapters can
@@ -201,8 +211,36 @@ async def _run_async(
         model_name=getattr(model, 'name', '') or '',
         usage=trace.total_usage,
         latency=run_wall_time,
+        runner_metrics=run_metrics,
     )
     return InferenceResult(output=output, messages=messages, trace=trace)
+
+
+def _build_bridge_model_routes(config: ExternalAgentConfig) -> Dict[str, Model]:
+    """Instantiate exact request-model routes declared on ``BridgeConfig``."""
+    routes: Dict[str, Model] = {}
+    for request_model, route in config.bridge.model_routes.items():
+        api_key = None
+        if route.api_key_env:
+            api_key = os.getenv(route.api_key_env)
+            if not api_key:
+                raise ValueError(
+                    f'bridge model route {request_model!r} requires environment variable '
+                    f'{route.api_key_env!r}'
+                )
+        routes[request_model] = get_model(
+            model=route.model_id,
+            eval_type=route.eval_type,
+            base_url=route.api_url,
+            api_key=api_key,
+            config=GenerateConfig(**route.generation_config),
+            model_args=route.model_args,
+        )
+    if not routes and not config.bridge.strict_model_routing:
+        return {}
+    if config.bridge.strict_model_routing and not routes:
+        raise ValueError('strict_model_routing requires at least one bridge.model_routes entry')
+    return routes
 
 
 def _maybe_inject_host_gateway(env: AgentEnvironment) -> None:
@@ -244,10 +282,13 @@ def _to_model_output(
     model_name: str,
     usage: Optional[ModelUsage] = None,
     latency: float = 0.0,
+    runner_metrics: Optional[Dict[str, Any]] = None,
 ) -> ModelOutput:
     """Wrap the agent answer and aggregate bridge usage in a ModelOutput."""
     choice = ChatCompletionChoice.from_content(text)
     meta: Dict[str, Any] = {'source': 'agent.external'}
+    if runner_metrics:
+        meta['runner_metrics'] = runner_metrics
     normalized_usage = None
     if usage is not None:
         total_tokens = int(usage.input_tokens or 0) + int(usage.output_tokens or 0)

@@ -20,3 +20,4 @@ openclaw_evalscope_cli/.openclaw-eval/
 *.tgz
 *.tar.zst
 *.tar.xz
+ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md

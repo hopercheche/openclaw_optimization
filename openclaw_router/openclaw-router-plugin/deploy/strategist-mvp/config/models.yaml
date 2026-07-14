@@ -1,0 +1,63 @@
+models:
+  small:
+    name: qwen3.6-flash
+    cost_per_1k_tokens: 0.001
+    max_tokens: 4096
+  mid:
+    name: qwen3.7-plus
+    cost_per_1k_tokens: 0.003
+    max_tokens: 8192
+  large:
+    name: qwen3.7-max
+    cost_per_1k_tokens: 0.01
+    max_tokens: 16384
+
+router:
+  reasoning_keywords:
+    - why
+    - why not
+    - explain
+    - explain why
+    - explain how
+    - compare
+    - compare with
+    - difference between
+    - prove
+    - prove that
+    - derive
+    - show that
+    - analyze
+    - analyze the
+    - what is the
+    - what are the
+    - how to
+    - how can
+    - how does
+    - why does
+    - which is
+    - which one
+    - 是否
+    - 为什么
+    - 解释
+    - 分析
+    - 证明
+    - 推导
+    - 比较
+    - 区别
+    - 差异
+    - 如何
+    - 怎样
+    - 什么是
+    - 哪些
+  length_thresholds:
+    short: 50
+    medium: 150
+  complexity_thresholds:
+    high_sentence_count: 3
+    high_word_count: 80
+    code_block_weight: 0.3
+    math_signal_weight: 0.2
+  weights:
+    keyword: 0.4
+    length: 0.3
+    complexity: 0.3

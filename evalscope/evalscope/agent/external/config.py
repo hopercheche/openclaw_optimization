@@ -7,7 +7,7 @@ The ``mode`` literal serves as the Pydantic discriminator on the
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from evalscope.api.agent.types import BaseAgentConfig
 
@@ -40,6 +40,17 @@ class ExternalAgentFramework:
     """Nous Research's ``hermes`` agent (uses OpenAI Chat Completions API)."""
 
 
+class BridgeModelConfig(BaseModel):
+    """One request-model route exposed by the external-agent bridge."""
+
+    model_id: str
+    eval_type: str = Field(default='openai_api')
+    api_url: Optional[str] = Field(default=None)
+    api_key_env: Optional[str] = Field(default=None)
+    generation_config: Dict[str, Any] = Field(default_factory=dict)
+    model_args: Dict[str, Any] = Field(default_factory=dict)
+
+
 class BridgeConfig(BaseModel):
     """Knobs for the reverse-proxy bridge that sits between an external
     agent CLI and EvalScope's model layer.
@@ -53,6 +64,16 @@ class BridgeConfig(BaseModel):
     proxy_port: Optional[int] = Field(default=None)
     """Port the proxy binds to.  ``None`` lets the OS pick a free port —
     recommended unless you need a stable URL."""
+
+    model_routes: Dict[str, BridgeModelConfig] = Field(default_factory=dict)
+    """Exact request model id → EvalScope model configuration mapping.
+
+    Empty preserves the historical single-model bridge behavior. API keys are
+    resolved from ``api_key_env`` at runtime and are never stored here.
+    """
+
+    strict_model_routing: bool = Field(default=False)
+    """Reject unknown request model ids instead of using the default model."""
 
 
 class ExternalAgentConfig(BaseAgentConfig):

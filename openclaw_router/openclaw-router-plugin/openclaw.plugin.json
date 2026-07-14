@@ -1,0 +1,66 @@
+{
+  "id": "openclaw-router",
+  "name": "OpenClaw Router",
+  "description": "Routes model calls to small, mid, or large models through an external router API",
+  "activation": {
+    "onStartup": true
+  },
+  "providers": [
+    "openclaw-router"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "minLength": 1
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "confidenceThreshold": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "default": 0.5
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 60000,
+        "default": 5000
+      },
+      "strict": {
+        "type": "boolean",
+        "default": false
+      },
+      "evalSampleId": {
+        "type": "string"
+      },
+      "tiers": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "small": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mid": {
+            "type": "string",
+            "minLength": 1
+          },
+          "large": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "small",
+          "mid",
+          "large"
+        ]
+      }
+    }
+  }
+}

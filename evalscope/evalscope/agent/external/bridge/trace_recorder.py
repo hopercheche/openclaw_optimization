@@ -74,12 +74,14 @@ class BridgeTraceRecorder:
         output: ModelOutput,
         *,
         latency_ms: Optional[float] = None,
+        resolved_model: Optional[str] = None,
     ) -> None:
         """Append events for one Anthropic request/response round-trip."""
         self._record_turn(
             request_body,
             output,
             latency_ms=latency_ms,
+            resolved_model=resolved_model,
             extract_tool_results=self._extract_tool_results,
         )
 
@@ -89,12 +91,14 @@ class BridgeTraceRecorder:
         output: ModelOutput,
         *,
         latency_ms: Optional[float] = None,
+        resolved_model: Optional[str] = None,
     ) -> None:
         """Append events for one OpenAI Chat Completions round-trip."""
         self._record_turn(
             request_body,
             output,
             latency_ms=latency_ms,
+            resolved_model=resolved_model,
             extract_tool_results=self._extract_openai_tool_results,
         )
 
@@ -104,12 +108,14 @@ class BridgeTraceRecorder:
         output: ModelOutput,
         *,
         latency_ms: Optional[float] = None,
+        resolved_model: Optional[str] = None,
     ) -> None:
         """Append events for one OpenAI Responses API round-trip."""
         self._record_turn(
             request_body,
             output,
             latency_ms=latency_ms,
+            resolved_model=resolved_model,
             extract_tool_results=self._extract_responses_tool_results,
             messages_key='input',
         )
@@ -120,6 +126,7 @@ class BridgeTraceRecorder:
         output: ModelOutput,
         *,
         latency_ms: Optional[float] = None,
+        resolved_model: Optional[str] = None,
     ) -> None:
         """Append events for one Gemini generateContent round-trip.
 
@@ -130,6 +137,7 @@ class BridgeTraceRecorder:
             request_body,
             output,
             latency_ms=latency_ms,
+            resolved_model=resolved_model,
             extract_tool_results=self._extract_gemini_tool_results,
             messages_key='contents',
         )
@@ -140,6 +148,7 @@ class BridgeTraceRecorder:
         output: ModelOutput,
         *,
         latency_ms: Optional[float],
+        resolved_model: Optional[str],
         extract_tool_results,
         messages_key: str = 'messages',
     ) -> None:
@@ -194,7 +203,11 @@ class BridgeTraceRecorder:
                 message_id=assistant_msg.id,
                 latency_ms=latency_ms,
                 token_usage=_flat_usage(output),
-                payload={'stop_reason': output.stop_reason},
+                payload={
+                    'stop_reason': output.stop_reason,
+                    'requested_model': request_body.get('model'),
+                    'resolved_model': resolved_model or output.model or self._model_name,
+                },
             )
 
             for tc in assistant_msg.tool_calls or []:
@@ -229,6 +242,7 @@ class BridgeTraceRecorder:
         timed_out: bool,
         wall_time: float,
         error: Optional[str] = None,
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Record CLI exit.  Step pinned to the most recent generate step."""
         with self._lock:
@@ -239,6 +253,8 @@ class BridgeTraceRecorder:
             }
             if error:
                 payload['error'] = error
+            if metrics:
+                payload['runner_metrics'] = metrics
             self._trace.add_event(
                 step=max(self._step, 0),
                 type=EventType.RUN_END,
@@ -553,6 +569,9 @@ def _flat_usage(output: ModelOutput) -> Optional[Dict[str, int]]:
         'input': int(usage.input_tokens or 0),
         'output': int(usage.output_tokens or 0),
         'total': int(usage.total_tokens or 0),
+        'cache_read': int(usage.input_tokens_cache_read or 0),
+        'cache_write': int(usage.input_tokens_cache_write or 0),
+        'reasoning': int(usage.reasoning_tokens or 0),
     }
 
 

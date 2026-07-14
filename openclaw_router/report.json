@@ -1,0 +1,66 @@
+{
+  "total_queries": 6,
+  "avg_latency_ms": 401.5,
+  "avg_tokens": 27.7,
+  "total_cost_usd": 0.0249,
+  "tier_distribution": {
+    "small": 6,
+    "mid": 0,
+    "large": 0
+  },
+  "cost_comparison": {
+    "routed_cost": 0.0249,
+    "always_large_cost": 0.498,
+    "savings_pct": 95.0
+  },
+  "queries": [
+    {
+      "query": "\"\"\"Sample queries for benchmark testing.\"\"\"",
+      "tier": "small",
+      "latency_ms": 381,
+      "total_tokens": 31,
+      "cost_usd": 0.00465,
+      "confidence": 0.85
+    },
+    {
+      "query": "今天天气怎么样？",
+      "tier": "small",
+      "latency_ms": 305,
+      "total_tokens": 19,
+      "cost_usd": 0.00285,
+      "confidence": 0.85
+    },
+    {
+      "query": "什么是机器学习？",
+      "tier": "small",
+      "latency_ms": 701,
+      "total_tokens": 19,
+      "cost_usd": 0.00285,
+      "confidence": 0.85
+    },
+    {
+      "query": "请解释为什么梯度下降在凸优化问题中能够收敛到全局最优。",
+      "tier": "small",
+      "latency_ms": 493,
+      "total_tokens": 26,
+      "cost_usd": 0.0039,
+      "confidence": 0.65
+    },
+    {
+      "query": "Compare and contrast supervised learning vs unsupervised learning.",
+      "tier": "small",
+      "latency_ms": 323,
+      "total_tokens": 39,
+      "cost_usd": 0.00585,
+      "confidence": 0.65
+    },
+    {
+      "query": "Prove that the square root of 2 is irrational.",
+      "tier": "small",
+      "latency_ms": 206,
+      "total_tokens": 32,
+      "cost_usd": 0.0048,
+      "confidence": 0.69
+    }
+  ]
+}

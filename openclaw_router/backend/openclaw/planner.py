@@ -1,0 +1,991 @@
+from __future__ import annotations
+
+import re
+import threading
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Callable
+
+from .as2_adapter import AS2Status, build_user_message_snapshot, map_local_event_to_as2
+from .as2_runtime import generate_as2_openai_plan
+from .audit import render_audit_markdown
+from .models import AuditEvent, CandidateStep, RunState, utc_now
+from .permissions import PermissionEngine
+from .planner_profile_model import predict_goal_profile
+from .search_planner import DEFAULT_PLANNER_STRATEGY, normalize_planner_strategy, select_planner_path
+from .storage import RunStorage
+
+
+EventSink = Callable[[AuditEvent], None]
+
+
+@dataclass(slots=True)
+class PlannerSubtask:
+    """Architecture-level contract between planner, strategist, architect, and executor."""
+
+    task_id: str
+    index: int
+    title: str
+    objective: str
+    tool_name: str
+    action: str
+    model_tier: str
+    model_selection_reason: str
+    risk_level: str
+    context_policy: str
+    memory_queries: list[str]
+    success_criteria: list[str]
+    executor_kind: str
+    status: str = "queued"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+class LocalAuditPlanner:
+    """Deterministic, auditable planner scaffold inspired by AS2 event flow."""
+
+    def __init__(
+        self,
+        storage: RunStorage,
+        permission_engine: PermissionEngine,
+        as2_status: AS2Status,
+        event_sink: EventSink | None = None,
+        planner_strategy: str | None = None,
+    ) -> None:
+        self.storage = storage
+        self.permission_engine = permission_engine
+        self.as2_status = as2_status
+        self.event_sink = event_sink
+        self.planner_strategy = normalize_planner_strategy(planner_strategy or DEFAULT_PLANNER_STRATEGY)
+
+    def run(self, state: RunState) -> RunState:
+        state.status = "running"
+        state.updated_at = utc_now()
+        self.storage.save_state(state)
+
+        self._emit(state, "run_started", "Run accepted by AS2-backed audit runtime.", {
+            "as2": self.as2_status.to_dict(),
+            "as2_user_msg": build_user_message_snapshot(state.goal, state.run_id),
+        })
+        self._emit(state, "goal_analysis", "Normalized user goal and extracted audit intent.", {
+            "goal": state.goal.strip(),
+            "permission_mode": state.permission_mode,
+            "planner_strategy": state.planner_strategy,
+        })
+
+        candidates = self._generate_candidates_from_runtime(state)
+        for candidate in candidates:
+            self._emit(state, "candidate_step", f"Candidate generated: {candidate.title}", {
+                "candidate": candidate.to_dict(),
+            })
+
+        selection = select_planner_path(
+            candidates,
+            state,
+            self.permission_engine,
+            state.planner_strategy or self.planner_strategy,
+        )
+        for trace_event in selection.trace_events:
+            self._emit(state, trace_event.event_type, trace_event.message, trace_event.data)
+        selected = selection.selected
+        self._emit(state, "planning", "Selected bounded high-value planner path.", {
+            "selected_titles": [step.title for step in selected],
+            "selected_tools": [step.tool_name for step in selected],
+            "planner_strategy": selection.strategy_name,
+            "selection_rule": selection.selection_rule,
+            "architecture_components": [
+                "planner",
+                "task_queue",
+                "strategist",
+                "architect",
+                "executor",
+                "verifier",
+                "state_memory_audit_store",
+            ],
+        })
+
+        task_queue = self._build_task_queue(state, selected)
+        self._emit(state, "architecture_snapshot", "Planner runtime aligned selected path to architecture roles.", {
+            "snapshot": self._architecture_snapshot(task_queue),
+        })
+        self._emit(state, "task_queue_created", "Planner decomposed selected path into executable subtasks.", {
+            "task_queue": [subtask.to_dict() for subtask in task_queue],
+            "queue_policy": "bounded_selected_path_fifo_with_verifier_feedback",
+            "replan_policy": "verifier_result may return next_subtask, await_human, replan, or complete",
+        })
+
+        completed_titles: list[str] = []
+        blocked_titles: list[str] = []
+        critique_notes: list[str] = []
+        verifier_next_actions: list[str] = []
+
+        for subtask, step in zip(task_queue, selected):
+            subtask.status = "running"
+            self._emit(state, "subtask_started", f"Subtask {subtask.index}: {subtask.title}", {
+                "subtask": subtask.to_dict(),
+            })
+            self._emit(state, "reasoning", f"Step {subtask.index}: {step.rationale}", {
+                "step": step.to_dict(),
+                "subtask_id": subtask.task_id,
+            })
+            self._emit_strategist_event(state, subtask)
+            self._emit_architect_event(state, subtask)
+            decision = self.permission_engine.decide(step, state.permission_mode)
+            self._emit(state, "permission", f"Permission decision for {step.tool_name}: {decision.behavior}", {
+                "subtask_id": subtask.task_id,
+                "step_title": step.title,
+                "decision": decision.to_dict(),
+            })
+
+            if decision.behavior == "deny":
+                subtask.status = "blocked"
+                blocked_titles.append(step.title)
+                critique = self._critique(step, "denied")
+                critique_notes.append(critique)
+                self._emit(state, "critique", "Verifier marked the step as blocked by policy.", {
+                    "subtask_id": subtask.task_id,
+                    "step_title": step.title,
+                    "critique": critique,
+                })
+                next_action = self._emit_verifier_result(
+                    state,
+                    subtask,
+                    step,
+                    outcome="denied",
+                    decision_behavior=decision.behavior,
+                    critique=critique,
+                )
+                verifier_next_actions.append(next_action)
+                self._emit(state, "subtask_finished", f"Subtask blocked: {subtask.title}", {
+                    "subtask": subtask.to_dict(),
+                    "next_action": next_action,
+                })
+                continue
+
+            if decision.behavior == "ask":
+                subtask.status = "human_gated"
+                blocked_titles.append(step.title)
+                critique = self._critique(step, "requires_human")
+                critique_notes.append(critique)
+                self._emit(state, "human_gate", "Step paused because human confirmation is required.", {
+                    "subtask_id": subtask.task_id,
+                    "step_title": step.title,
+                    "suggested_next_action": "Switch to ACCEPT_EDITS/BYPASS or add an explicit approval rule for this action.",
+                })
+                self._emit(state, "critique", "Verifier kept the action out of automatic execution.", {
+                    "subtask_id": subtask.task_id,
+                    "step_title": step.title,
+                    "critique": critique,
+                })
+                next_action = self._emit_verifier_result(
+                    state,
+                    subtask,
+                    step,
+                    outcome="requires_human",
+                    decision_behavior=decision.behavior,
+                    critique=critique,
+                )
+                verifier_next_actions.append(next_action)
+                self._emit(state, "subtask_finished", f"Subtask paused for human approval: {subtask.title}", {
+                    "subtask": subtask.to_dict(),
+                    "next_action": next_action,
+                })
+                continue
+
+            subtask.status = "executing"
+            self._emit(state, "executor_started", f"Executor accepted subtask: {subtask.title}", {
+                "subtask": subtask.to_dict(),
+                "permission_behavior": decision.behavior,
+            })
+            self._emit(state, "tool_call", f"Executing simulated tool: {step.tool_name}", {
+                "subtask_id": subtask.task_id,
+                "tool_name": step.tool_name,
+                "action": step.action,
+            })
+            result = self._simulate_tool(step, state.workspace_path)
+            completed_titles.append(step.title)
+            self._emit(state, "tool_result", f"Tool completed: {step.tool_name}", {
+                "subtask_id": subtask.task_id,
+                "tool_name": step.tool_name,
+                "result": result,
+            })
+            critique = self._critique(step, "completed")
+            critique_notes.append(critique)
+            self._emit(state, "critique", "Verifier checked evidence value and residual risk.", {
+                "subtask_id": subtask.task_id,
+                "step_title": step.title,
+                "critique": critique,
+            })
+            subtask.status = "completed"
+            next_action = self._emit_verifier_result(
+                state,
+                subtask,
+                step,
+                outcome="completed",
+                decision_behavior=decision.behavior,
+                critique=critique,
+                result=result,
+            )
+            verifier_next_actions.append(next_action)
+            self._emit(state, "subtask_finished", f"Subtask completed: {subtask.title}", {
+                "subtask": subtask.to_dict(),
+                "next_action": next_action,
+            })
+            time.sleep(0.05)
+
+        queue_next_action = self._queue_next_action(verifier_next_actions)
+        self._emit(state, "planner_queue_closed", "Planner closed subtask queue after verifier feedback.", {
+            "completed_titles": completed_titles,
+            "blocked_titles": blocked_titles,
+            "completed_count": len(completed_titles),
+            "blocked_count": len(blocked_titles),
+            "next_action": queue_next_action,
+            "verifier_next_actions": verifier_next_actions,
+        })
+
+        state.final_response = self._final_response(completed_titles, blocked_titles, critique_notes)
+        self._emit(state, "final", "Planner produced final recommendation.", {
+            "final_response": state.final_response,
+        })
+        state.status = "completed"
+        state.updated_at = utc_now()
+        state.event_count = len(self.storage.load_events(state.run_id)) + 1
+        self.storage.save_state(state)
+        self._emit(state, "run_completed", "Run completed and audit report is ready.", {
+            "status": state.status,
+        })
+
+        events = self.storage.load_events(state.run_id)
+        audit_path = self.storage.write_audit(state.run_id, render_audit_markdown(state, events))
+        state.audit_path = str(audit_path)
+        state.event_count = len(events)
+        state.updated_at = utc_now()
+        self.storage.save_state(state)
+        return state
+
+    def _build_task_queue(self, state: RunState, selected: list[CandidateStep]) -> list[PlannerSubtask]:
+        task_queue: list[PlannerSubtask] = []
+        for index, step in enumerate(selected, start=1):
+            model_tier, model_reason = self._select_model_tier(step, state)
+            task_queue.append(
+                PlannerSubtask(
+                    task_id=f"{state.run_id}-subtask-{index:02d}",
+                    index=index,
+                    title=step.title,
+                    objective=step.rationale,
+                    tool_name=step.tool_name,
+                    action=step.action,
+                    model_tier=model_tier,
+                    model_selection_reason=model_reason,
+                    risk_level=self._risk_level(step),
+                    context_policy=self._context_policy(step),
+                    memory_queries=self._memory_queries(step, state),
+                    success_criteria=self._success_criteria(step),
+                    executor_kind=self._executor_kind(step),
+                )
+            )
+        return task_queue
+
+    def _architecture_snapshot(self, task_queue: list[PlannerSubtask]) -> dict:
+        return {
+            "planner": "decompose, score, schedule, and replan from verifier feedback",
+            "task_queue": {
+                "size": len(task_queue),
+                "subtask_ids": [subtask.task_id for subtask in task_queue],
+            },
+            "strategist": "choose small, medium, or large model tier per subtask risk and tool class",
+            "architect": "construct progressive context, memory queries, and success criteria per subtask",
+            "executor": "run the permitted tool path and return structured evidence",
+            "verifier": "judge policy outcome, evidence value, residual risk, and next action",
+            "state_memory_audit_store": "persist events, queue decisions, tool evidence, and audit replay state",
+        }
+
+    def _select_model_tier(self, step: CandidateStep, _state: RunState) -> tuple[str, str]:
+        if step.risk >= 5 or step.tool_name == "deploy_runner":
+            return "large", "high-risk or deployment step needs the strongest policy reasoning"
+        if step.tool_name in {"safety_guard", "verifier"}:
+            return "medium", "policy/verifier step needs richer evidence context"
+        if step.mutates_workspace or step.risk >= 3 or step.tool_name in _EXECUTION_TOOLS:
+            return "medium", "execution or mutation step needs context-aware planning"
+        return "small", "read-only planning step can use the fastest model tier"
+
+    def _risk_level(self, step: CandidateStep) -> str:
+        if step.risk >= 5:
+            return "high"
+        if step.risk >= 3:
+            return "medium"
+        return "low"
+
+    def _context_policy(self, step: CandidateStep) -> str:
+        if step.tool_name == "goal_analyzer":
+            return "goal_boundary"
+        if step.tool_name == "workspace_inspector":
+            return "workspace_snapshot"
+        if step.tool_name == "planner":
+            return "progressive_context+candidate_scores"
+        if step.tool_name in {"risk_model", "safety_guard"}:
+            return "permission_policy+risk_terms"
+        if step.tool_name == "verifier":
+            return "execution_evidence+critique_history"
+        if step.tool_name in _EXECUTION_TOOLS:
+            return "progressive_context+memory_retrieval+success_criteria"
+        return "progressive_context"
+
+    def _memory_queries(self, step: CandidateStep, state: RunState) -> list[str]:
+        tokens = [
+            token
+            for token in re.findall(r"[A-Za-z0-9_\-\u4e00-\u9fff]{3,}", state.goal.lower())
+            if token not in {"the", "and", "with", "after", "before", "then", "only"}
+        ]
+        goal_terms = [f"goal:{token}" for token in tokens[:3]]
+        return [f"tool:{step.tool_name}", f"context:{self._context_policy(step)}", *goal_terms]
+
+    def _success_criteria(self, step: CandidateStep) -> list[str]:
+        criteria = [
+            "permission decision is recorded before execution",
+            "subtask emits verifier_result with next_action",
+        ]
+        if step.tool_name in _EXECUTION_TOOLS:
+            criteria.append("tool evidence is captured or the action is safely gated")
+        if step.mutates_workspace:
+            criteria.append("workspace mutation remains inside configured workspace")
+        if step.tool_name in {"risk_model", "safety_guard"}:
+            criteria.append("policy boundary is explicit enough for audit replay")
+        if step.tool_name == "verifier":
+            criteria.append("residual risk and evidence completeness are judged")
+        return criteria
+
+    def _executor_kind(self, step: CandidateStep) -> str:
+        if step.tool_name in {"risk_model", "safety_guard"}:
+            return "policy_gate"
+        if step.tool_name == "verifier":
+            return "verifier"
+        if step.tool_name in {"mobile_gui_runner", "mobile_cli_runner", "mcp_tool_runner"}:
+            return "external_tool"
+        if step.tool_name in {"file_writer", "command_runner", "deploy_runner"}:
+            return "workspace_tool"
+        return "read_only_agent"
+
+    def _emit_strategist_event(self, state: RunState, subtask: PlannerSubtask) -> AuditEvent:
+        return self._emit(state, "strategist_model_selection", "Strategist selected model tier for subtask.", {
+            "subtask_id": subtask.task_id,
+            "tool_name": subtask.tool_name,
+            "model_tier": subtask.model_tier,
+            "risk_level": subtask.risk_level,
+            "reason": subtask.model_selection_reason,
+        })
+
+    def _emit_architect_event(self, state: RunState, subtask: PlannerSubtask) -> AuditEvent:
+        return self._emit(state, "architect_context", "Architect prepared context contract for subtask.", {
+            "subtask_id": subtask.task_id,
+            "context_policy": subtask.context_policy,
+            "memory_queries": subtask.memory_queries,
+            "success_criteria": subtask.success_criteria,
+            "executor_kind": subtask.executor_kind,
+        })
+
+    def _emit_verifier_result(
+        self,
+        state: RunState,
+        subtask: PlannerSubtask,
+        step: CandidateStep,
+        outcome: str,
+        decision_behavior: str,
+        critique: str,
+        result: str | None = None,
+    ) -> str:
+        if outcome == "completed":
+            next_action = "next_subtask"
+            evidence_complete = bool(result)
+            residual_risk = max(step.risk - 1, 0)
+        elif outcome == "requires_human":
+            next_action = "await_human"
+            evidence_complete = True
+            residual_risk = step.risk
+        else:
+            next_action = "replan"
+            evidence_complete = True
+            residual_risk = step.risk
+
+        self._emit(state, "verifier_result", "Verifier judged subtask outcome and next action.", {
+            "subtask_id": subtask.task_id,
+            "step_title": step.title,
+            "tool_name": step.tool_name,
+            "outcome": outcome,
+            "decision_behavior": decision_behavior,
+            "evidence_complete": evidence_complete,
+            "residual_risk": residual_risk,
+            "next_action": next_action,
+            "critique": critique,
+        })
+        return next_action
+
+    def _queue_next_action(self, verifier_next_actions: list[str]) -> str:
+        if "await_human" in verifier_next_actions:
+            return "await_human"
+        if "replan" in verifier_next_actions:
+            return "replan"
+        return "complete"
+
+    def _generate_candidates_from_runtime(self, state: RunState) -> list[CandidateStep]:
+        if not self.as2_status.model_ready:
+            self._emit(state, "as2_model_skipped", "AS2 model planner skipped because no provider key is configured.", {
+                "model_ready": False,
+            })
+            return self._generate_candidates(state.goal)
+
+        self._emit(state, "as2_model_started", "Requesting candidate plan from AS2 OpenAI-compatible Agent.", {
+            "model_provider": self.as2_status.model_provider,
+            "model_name": self.as2_status.default_model,
+            "model_base_url": self.as2_status.model_base_url,
+            "as2_runtime": self.as2_status.runtime,
+            "architecture": self.as2_status.architecture,
+        })
+        result = generate_as2_openai_plan(
+            state.goal,
+            state.permission_mode,
+            workspace_path=state.workspace_path,
+            run_id=state.run_id,
+        )
+        for raw_event in result.raw_events[:40]:
+            self._emit(state, "as2_model_event", f"AS2 stream event: {raw_event.event_type}", {
+                "as2_event_type": raw_event.event_type,
+                "payload": raw_event.payload,
+            })
+
+        if result.used_model:
+            self._emit(state, "as2_model_result", "AS2 OpenAI Agent produced planner candidates.", {
+                "model_name": result.model_name,
+                "candidate_count": len(result.candidates),
+                "architecture": result.architecture,
+            })
+            return result.candidates
+
+        self._emit(state, "as2_model_fallback", "Falling back to deterministic planner candidates.", {
+            "model_name": result.model_name,
+            "error": result.error,
+            "architecture": result.architecture,
+        })
+        return self._generate_candidates(state.goal)
+
+    def _emit(self, state: RunState, event_type: str, message: str, data: dict | None = None) -> AuditEvent:
+        event_data = data or {}
+        event_data.setdefault("as2_event_type", map_local_event_to_as2(event_type, event_data))
+        event_id = len(self.storage.load_events(state.run_id)) + 1
+        event = AuditEvent(
+            run_id=state.run_id,
+            event_id=event_id,
+            event_type=event_type,
+            message=message,
+            data=event_data,
+        )
+        self.storage.append_event(event)
+        state.event_count = event.event_id
+        state.updated_at = event.timestamp
+        self.storage.save_state(state)
+        if self.event_sink:
+            self.event_sink(event)
+        return event
+
+    def _generate_candidates(self, goal: str) -> list[CandidateStep]:
+        lower_goal = goal.lower()
+        mutating_goal = any(term in lower_goal for term in ["write", "edit", "deploy", "delete", "remove", "优化", "修改"])
+        production_goal = any(term in lower_goal for term in ["prod", "production", "上线", "部署"])
+        mobile_goal = _looks_like_mobile_workflow(goal)
+        profile_execution_tools = _profile_execution_tools_for_goal(goal)
+        mobile_execution_tools = _mobile_execution_tools_for_goal(goal)
+        learned_execution_tools = _learned_execution_tools_for_goal(goal)
+        execution_tools = profile_execution_tools or _merge_learned_and_mobile_execution_tools(
+            goal,
+            learned_execution_tools,
+            mobile_execution_tools,
+        )
+
+        candidates = [
+            CandidateStep(
+                title="Define audit boundary",
+                action="Record task scope, actor, workspace, and success criteria.",
+                tool_name="goal_analyzer",
+                rationale="A good audit starts by freezing what the run is allowed to attempt.",
+                impact=4,
+                evidence_value=5,
+                reversibility=5,
+                risk=1,
+            ),
+            CandidateStep(
+                title="Inspect workspace safely",
+                action="List project files and identify runtime boundaries without modifying files.",
+                tool_name="workspace_inspector",
+                rationale="Workspace context prevents the planner from inventing nonexistent surfaces.",
+                impact=4,
+                evidence_value=4,
+                reversibility=5,
+                risk=1,
+            ),
+            CandidateStep(
+                title="Build bounded plan candidates",
+                action="Generate alternative plan steps and score them by impact, evidence, reversibility, and risk.",
+                tool_name="planner",
+                rationale="Bounded Tree-of-Thoughts exploration improves planner quality without runaway cost.",
+                impact=5,
+                evidence_value=4,
+                reversibility=4,
+                risk=1,
+            ),
+            CandidateStep(
+                title="Review permission posture",
+                action="Classify proposed actions into allow, ask, or deny before any execution.",
+                tool_name="risk_model",
+                rationale="Permission decisions are first-class audit artifacts in AS2-style runtimes.",
+                impact=5,
+                evidence_value=5,
+                reversibility=5,
+                risk=1,
+            ),
+            CandidateStep(
+                title="Verify planner output",
+                action="Critique each accepted or blocked step for missing evidence and residual risk.",
+                tool_name="verifier",
+                rationale="Reflexion-style verification catches weak or unsafe plan transitions.",
+                impact=4,
+                evidence_value=5,
+                reversibility=5,
+                risk=1,
+            ),
+            CandidateStep(
+                title="Prepare implementation change",
+                action="Write or edit files inside the configured workspace only.",
+                tool_name="file_writer",
+                rationale="If the goal requires implementation, changes must remain workspace-scoped.",
+                impact=5 if mutating_goal else 2,
+                evidence_value=4,
+                reversibility=3,
+                risk=3,
+                mutates_workspace=True,
+            ),
+            CandidateStep(
+                title="Run validation command",
+                action="Run project validation command and capture logs.",
+                tool_name="command_runner",
+                rationale="Evidence is stronger when generated by a reproducible command.",
+                impact=4,
+                evidence_value=5,
+                reversibility=3,
+                risk=3,
+                mutates_workspace=True,
+            ),
+            CandidateStep(
+                title="Gate production deployment",
+                action="Deploy to production only after explicit human approval.",
+                tool_name="deploy_runner",
+                rationale="Production deployment is high impact and should not run under silent automation.",
+                impact=5 if production_goal else 1,
+                evidence_value=5,
+                reversibility=1,
+                risk=5,
+                mutates_workspace=True,
+            ),
+        ]
+        if mobile_goal or _needs_external_workflow_candidates(goal, execution_tools):
+            candidates.extend(_external_workflow_candidates(execution_tools, goal))
+        return candidates
+
+    def _simulate_tool(self, step: CandidateStep, workspace_path: str) -> str:
+        workspace = Path(workspace_path)
+        if step.tool_name == "workspace_inspector":
+            if not workspace.exists():
+                return f"Workspace does not exist: {workspace}"
+            visible = sorted(path.name for path in workspace.iterdir() if not path.name.startswith("."))
+            return f"Workspace visible entries: {visible[:12]}"
+        if step.tool_name == "planner":
+            return "Planner selected a bounded ToT path with ReAct-style action checkpoints."
+        if step.tool_name == "risk_model":
+            return "Permission policy created explicit allow/ask/deny evidence for each candidate action."
+        if step.tool_name == "verifier":
+            return "Verifier produced critique notes for completed and blocked steps."
+        if step.tool_name == "goal_analyzer":
+            return "Goal boundary recorded for audit replay."
+        if step.tool_name == "safety_guard":
+            return "Safety guard checked external-state, privacy, and confirmation policy before execution."
+        if step.tool_name == "mobile_gui_runner":
+            return "Mobile GUI workflow was simulated as an external-state action path."
+        if step.tool_name == "mobile_cli_runner":
+            return "Mobile CLI/ADB workflow was simulated with command evidence captured."
+        if step.tool_name == "mcp_tool_runner":
+            return "MCP-style host tool workflow was simulated with structured verifier evidence."
+        return "MVP simulation captured the action without applying external side effects."
+
+    def _critique(self, step: CandidateStep, outcome: str) -> str:
+        if outcome == "denied":
+            return f"{step.title}: blocked correctly; policy evidence is more valuable than unsafe execution."
+        if outcome == "requires_human":
+            return f"{step.title}: requires explicit approval; preserve pause state and suggested rule."
+        return (
+            f"{step.title}: evidence value={step.evidence_value}, risk={step.risk}; "
+            "acceptable for MVP trace, revisit with real AS2 tool result validation."
+        )
+
+    def _final_response(self, completed: list[str], blocked: list[str], critiques: list[str]) -> str:
+        completed_text = ", ".join(completed) if completed else "none"
+        blocked_text = ", ".join(blocked) if blocked else "none"
+        critique_text = " ".join(critiques[:3])
+        return (
+            f"Completed audited planner steps: {completed_text}. "
+            f"Blocked or gated steps: {blocked_text}. "
+            f"Verifier summary: {critique_text}"
+        )
+
+
+class PlannerThread(threading.Thread):
+    def __init__(self, planner: LocalAuditPlanner, state: RunState) -> None:
+        super().__init__(daemon=True)
+        self.planner = planner
+        self.state = state
+
+    def run(self) -> None:
+        try:
+            self.planner.run(self.state)
+        except Exception as exc:  # pragma: no cover - defensive runtime guard
+            self.state.status = "failed"
+            self.state.final_response = f"Planner failed: {exc}"
+            self.state.updated_at = utc_now()
+            self.planner.storage.save_state(self.state)
+            self.planner._emit(self.state, "run_failed", "Planner failed.", {
+                "error": repr(exc),
+            })
+
+
+def _looks_like_mobile_workflow(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "phoneharness",
+        "mobile",
+        "android",
+        "gui/",
+        "gui-primary",
+        "mcp",
+        "adb",
+        "手机",
+        "日历",
+        "邮件",
+        "联系人",
+        "地图",
+        "外卖",
+        "短信",
+        "相册",
+        "照片",
+        "浏览器",
+        "app",
+    ])
+
+
+def _profile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    found: list[str] = []
+    for marker in ["execution_tools=", "execution_tool="]:
+        start = lower_goal.find(marker)
+        if start < 0:
+            continue
+        raw_value = lower_goal[start + len(marker):]
+        raw_value = raw_value.split("]", 1)[0].split(";", 1)[0]
+        raw_value = raw_value.replace("|", ",").replace(" ", ",")
+        for item in raw_value.split(","):
+            tool_name = item.strip()
+            if tool_name in _EXECUTION_TOOLS:
+                found.append(tool_name)
+    return _ordered_execution_tools(found)
+
+
+def _learned_execution_tools_for_goal(goal: str) -> list[str]:
+    if _profile_execution_tools_for_goal(goal):
+        return []
+    if _goal_disallows_mutation(goal):
+        return []
+    prediction = predict_goal_profile(goal)
+    if prediction.tools_confidence < 0.55:
+        return []
+    if _goal_has_local_project_terms(goal) and not _allow_learned_tools_for_local_goal(prediction):
+        return []
+    return _ordered_execution_tools(prediction.execution_tools or [])
+
+
+def _allow_learned_tools_for_local_goal(prediction) -> bool:
+    return (
+        prediction.planner_profile == "skill_workflow"
+        and prediction.profile_confidence >= 0.85
+        and prediction.tools_confidence >= 0.85
+    )
+
+
+def _merge_learned_and_mobile_execution_tools(
+    goal: str,
+    learned_tools: list[str],
+    mobile_tools: list[str],
+) -> list[str]:
+    if not learned_tools:
+        return mobile_tools
+    prediction = predict_goal_profile(goal)
+    if (
+        prediction.profile_confidence >= 0.55
+        and prediction.planner_profile in {"skill_workflow", "api_planning", "policy_tool_agent"}
+    ):
+        return learned_tools
+    return _ordered_execution_tools([*learned_tools, *mobile_tools])
+
+
+def _mobile_execution_tools_for_goal(goal: str) -> list[str]:
+    lower_goal = goal.lower()
+    mobile_context = _has_mobile_context(lower_goal)
+    tools: list[str] = []
+    if any(term in lower_goal for term in [
+        "mcp",
+        "email",
+        "mail",
+        "send_email",
+        "calendar",
+        "create_calendar",
+        "邮件",
+        "邮箱",
+        "日历",
+        "提醒",
+    ]):
+        tools.append("mcp_tool_runner")
+    if mobile_context and any(term in lower_goal for term in [
+        "cli",
+        "shell",
+        "adb",
+        "termux",
+        "command",
+        "python",
+        "命令",
+        "脚本",
+    ]):
+        tools.append("mobile_cli_runner")
+    if any(term in lower_goal for term in [
+        "gui",
+        "app",
+        "android",
+        "phone",
+        "手机",
+        "打开",
+        "搜索",
+        "查看",
+        "设置",
+        "美团",
+        "地图",
+        "视频",
+        "音乐",
+        "相册",
+        "照片",
+        "浏览器",
+    ]):
+        tools.append("mobile_gui_runner")
+    if not tools and _looks_like_mobile_workflow(goal):
+        tools.append("mobile_gui_runner")
+
+    return _ordered_execution_tools(tools)
+
+
+def _has_mobile_context(lower_goal: str) -> bool:
+    return any(term in lower_goal for term in [
+        "phoneharness",
+        "mobile",
+        "android",
+        "gui/",
+        "gui-primary",
+        "adb",
+        "termux",
+        "手机",
+    ])
+
+
+_EXECUTION_TOOLS = {
+    "file_writer",
+    "command_runner",
+    "deploy_runner",
+    "mobile_gui_runner",
+    "mobile_cli_runner",
+    "mcp_tool_runner",
+}
+
+
+def _needs_external_workflow_candidates(goal: str, execution_tools: list[str]) -> bool:
+    lower_goal = goal.lower()
+    learned_policy = _learned_policy_mode_for_goal(goal)
+    return (
+        "mcp_tool_runner" in execution_tools
+        or "mobile_gui_runner" in execution_tools
+        or "mobile_cli_runner" in execution_tools
+        or "safety_policy=" in lower_goal
+        or learned_policy in {"confirm", "refuse"}
+        or "planner_profile=policy_tool_agent" in lower_goal
+        or "planner_profile=api_planning" in lower_goal
+    )
+
+
+def _external_workflow_candidates(execution_tools: list[str], goal: str) -> list[CandidateStep]:
+    lower_goal = goal.lower()
+    learned_policy = _learned_policy_mode_for_goal(goal)
+    include_safety_guard = any(term in lower_goal for term in [
+        "safety_policy=",
+        "policy_mode=refuse",
+        "policy_mode=confirm",
+        "never_auto",
+        "confirm_first",
+        "safe_complete",
+    ]) or learned_policy in {"confirm", "refuse"}
+    candidates = [
+        CandidateStep(
+            title="Check external workflow safety policy",
+            action="Classify the external workflow for privacy, irreversible actions, and confirmation policy.",
+            tool_name="safety_guard",
+            rationale="External tool workflows can touch state or policy boundaries, so safety should be explicit.",
+            impact=5,
+            evidence_value=5,
+            reversibility=5,
+            risk=1,
+        ),
+        CandidateStep(
+            title="Execute mobile GUI workflow",
+            action="Drive the Android GUI path in a sandboxed harness and capture verifier evidence.",
+            tool_name="mobile_gui_runner",
+            rationale="GUI execution is the primary PhoneHarness affordance for app-centered tasks.",
+            impact=5 if "mobile_gui_runner" in execution_tools else 3,
+            evidence_value=4,
+            reversibility=2,
+            risk=4,
+            mutates_workspace=True,
+        ),
+        CandidateStep(
+            title="Execute mobile CLI workflow",
+            action="Run device-side CLI or ADB-style commands in the mobile harness and capture logs.",
+            tool_name="mobile_cli_runner",
+            rationale="CLI execution covers PhoneHarness tasks with shell, Python, or ADB affordances.",
+            impact=5 if "mobile_cli_runner" in execution_tools else 2,
+            evidence_value=5,
+            reversibility=3,
+            risk=3,
+            mutates_workspace=True,
+        ),
+        CandidateStep(
+            title="Invoke MCP workflow tool",
+            action="Call host-side MCP-style tools for calendar, email, contacts, or structured phone workflows.",
+            tool_name="mcp_tool_runner",
+            rationale="MCP-style tools give structured execution evidence for cross-app phone tasks.",
+            impact=5 if "mcp_tool_runner" in execution_tools else 2,
+            evidence_value=5,
+            reversibility=3,
+            risk=3,
+            mutates_workspace=True,
+        ),
+    ]
+    if not include_safety_guard and "safety_guard" not in execution_tools:
+        candidates = [candidate for candidate in candidates if candidate.tool_name != "safety_guard"]
+    preferred = set(execution_tools)
+    return sorted(
+        candidates,
+        key=lambda step: (
+            step.tool_name != "safety_guard",
+            step.tool_name not in preferred,
+            -step.score,
+            step.title,
+        ),
+    )
+
+
+def _goal_disallows_mutation(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "without editing",
+        "without modifying",
+        "without writing",
+        "no edits",
+        "read-only",
+        "不修改",
+        "不要修改",
+        "不写入",
+        "不要写入",
+        "只读",
+    ])
+
+
+def _learned_policy_mode_for_goal(goal: str) -> str:
+    if _profile_execution_tools_for_goal(goal):
+        return ""
+    prediction = predict_goal_profile(goal)
+    if prediction.policy_confidence < 0.55:
+        return ""
+    if (
+        prediction.planner_profile != "policy_tool_agent"
+        and not _has_sensitive_policy_terms(goal)
+    ):
+        return ""
+    return prediction.policy_mode
+
+
+def _has_sensitive_policy_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    return any(term in lower_goal for term in [
+        "confirm",
+        "confirmation",
+        "approval",
+        "refund",
+        "cancel",
+        "cancellation",
+        "delete",
+        "export",
+        "privacy",
+        "private",
+        "sensitive",
+        "确认",
+        "批准",
+        "退款",
+        "取消",
+        "删除",
+        "删",
+        "导出",
+        "隐私",
+        "通讯录",
+        "联系人",
+        "电话",
+        "相册",
+        "照片",
+        "清理",
+        "存储",
+        "敏感",
+    ])
+
+
+def _goal_has_local_project_terms(goal: str) -> bool:
+    lower_goal = goal.lower()
+    if re.search(r"\b(benchmark|readme|openclaw|repository|workspace|production|deploy)\b", lower_goal):
+        return True
+    if re.search(r"\bplanner\b", lower_goal) and re.search(
+        r"\b(code|file|files|workspace|benchmark|implementation)\b",
+        lower_goal,
+    ):
+        return True
+    return any(term in lower_goal for term in [
+        "优化",
+        "修改",
+        "测试",
+        "验证",
+        "删除",
+        "部署",
+        "上线",
+    ])
+
+
+def _ordered_execution_tools(tools: list[str]) -> list[str]:
+    seen = set(tools)
+    ordered = [
+        "mcp_tool_runner",
+        "mobile_cli_runner",
+        "mobile_gui_runner",
+        "file_writer",
+        "command_runner",
+        "deploy_runner",
+    ]
+    return [tool for tool in ordered if tool in seen]

@@ -1052,7 +1052,7 @@ evalscope eval \
   --eval-type mock_llm \
   --datasets gsm8k \
   --limit 5 \
-  --dataset-dir /data/evalscope/datasets \
+  --dataset-dir /home/featurize/data/evalscope/datasets \
   --dataset-hub modelscope
 ```
 
@@ -1074,7 +1074,7 @@ run_task({
     "eval_type": "mock_llm",
     "datasets": ["gsm8k"],
     "limit": 5,
-    "dataset_dir": "/data/evalscope/datasets",
+    "dataset_dir": "/home/featurize/data/evalscope/datasets",
     "dataset_hub": "modelscope",
 })
 ```
@@ -1084,7 +1084,7 @@ run_task({
 本项目的 `openclaw_evalscope_cli/run_evalscope.py` 已读取以下环境变量：
 
 ```bash
-export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_DIR=/home/featurize/data/evalscope/datasets
 export EVALSCOPE_DATASET_HUB=modelscope
 ```
 
@@ -1096,9 +1096,9 @@ source /home/lenovo/code/AIE4902/.venv/bin/activate
 
 export EVALSCOPE_DATASET=browsecomp
 export EVALSCOPE_LIMIT=2
-export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_DIR=/home/featurize/data/evalscope/datasets
 export EVALSCOPE_DATASET_HUB=modelscope
-export EVALSCOPE_WORK_DIR=/data/evalscope/outputs/openclaw-browsecomp
+export EVALSCOPE_WORK_DIR=/home/featurize/data/evalscope/outputs/openclaw-browsecomp
 
 python -m openclaw_evalscope_cli.run_evalscope
 ```
@@ -1109,8 +1109,8 @@ baseline 和 modified 对比实验应使用相同的 `EVALSCOPE_DATASET_DIR`，�
 
 | 配置 | 用途 | 示例 |
 |---|---|---|
-| `EVALSCOPE_DATASET_DIR` | benchmark 数据集下载和缓存 | `/data/evalscope/datasets` |
-| `EVALSCOPE_WORK_DIR` | EvalScope 日志、预测和报告 | `/data/evalscope/outputs/openclaw-browsecomp` |
+| `EVALSCOPE_DATASET_DIR` | benchmark 数据集下载和缓存 | `/home/featurize/data/evalscope/datasets` |
+| `EVALSCOPE_WORK_DIR` | EvalScope 日志、预测和报告 | `/home/featurize/data/evalscope/outputs/openclaw-browsecomp` |
 | `OPENCLAW_EVAL_STATE_DIR` | OpenClaw config、session、workspace 等运行状态 | `openclaw_evalscope_cli/.openclaw-eval/state` |
 
 不要把数据集目录放进 `OPENCLAW_EVAL_STATE_DIR`。后者是容器运行状态，可能在重建实验环境时被清理，也可能包含 token、session 和 OpenClaw 自动生成的嵌套 workspace 仓库。
@@ -1120,17 +1120,17 @@ baseline 和 modified 对比实验应使用相同的 `EVALSCOPE_DATASET_DIR`，�
 如果服务器已经下载过数据集，可以直接复制缓存，再把 `EVALSCOPE_DATASET_DIR` 指向新位置：
 
 ```bash
-sudo mkdir -p /data/evalscope/datasets
+sudo mkdir -p /home/featurize/data/evalscope/datasets
 sudo rsync -a --info=progress2 \
-  /home/lenovo/.cache/modelscope/hub/datasets/ \
-  /data/evalscope/datasets/
-sudo chown -R lenovo:lenovo /data/evalscope/datasets
+  /home/featurize/.cache/modelscope/hub/datasets/ \
+  /home/featurize/data/evalscope/datasets/
+sudo chown -R featurize:featurize /home/featurize/data/evalscope/datasets
 ```
 
 复制完成后先用小样本验证：
 
 ```bash
-export EVALSCOPE_DATASET_DIR=/data/evalscope/datasets
+export EVALSCOPE_DATASET_DIR=/home/featurize/data/evalscope/datasets
 export EVALSCOPE_DATASET_HUB=modelscope
 export EVALSCOPE_DATASET=gsm8k
 export EVALSCOPE_LIMIT=1
@@ -1591,3 +1591,313 @@ total_cost = input_cost + cached_input_cost + output_cost
 当前金额只统计被评测 OpenClaw harness 通过 EvalScope bridge 发起的模型调用，不包含 LLM Judge、
 `analysis_report`、搜索或其他工具服务费用、税费、套餐抵扣和供应商阶梯折扣。因此它是可复现的模型调用
 费用估算，不是供应商最终账单；需要精确实付金额时应以供应商账单或 billing API 为准。
+
+## 16. Router 插件镜像与 EvalScope 对比评测
+
+本轮 Router 接入的全部实现路径、故障时间线和验证证据见
+[`ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md`](ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md)。
+
+Router 实验不会修改或覆盖 baseline 镜像。最终运行由三个镜像角色组成：
+
+| 角色 | 默认镜像 | 说明 |
+|---|---|---|
+| baseline | `openclaw-baseline:2026.6.11-srcsnap` | 原始 OpenClaw 对照组 |
+| Router Gateway | `openclaw-router-gateway:2026.6.11-overlay` | baseline 上只叠加 Router 和官方 Prometheus 扩展 |
+| Router API | `openclaw-router-api:2026.6.11` | XGBoost/PCA 路由 sidecar |
+
+### 16.1 增量构建，不重新构建 OpenClaw
+
+在服务器项目目录执行：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+export OPENCLAW_ROUTER_BASE_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_ROUTER_GATEWAY_IMAGE=openclaw-router-gateway:2026.6.11-overlay
+export OPENCLAW_ROUTER_API_IMAGE=openclaw-router-api:2026.6.11
+export OPENCLAW_ROUTER_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+
+bash openclaw_evalscope_cli/build_router_images.sh
+```
+
+`router-overlay.Dockerfile` 只有 `FROM baseline`、创建目录和 `COPY`，不会运行 `pnpm install`、
+`npm install` 或重新编译 OpenClaw。Router API 才会运行 `apt` 和 `pip`。如果这些 Python 构建步骤
+需要代理，可只给 Router API 设置 HTTP 代理：
+
+```bash
+PROXY_HOST="$(ip route show default | awk '{print $3}')"
+export OPENCLAW_ROUTER_BUILD_HTTP_PROXY="http://${PROXY_HOST}:7890"
+bash openclaw_evalscope_cli/build_router_images.sh
+```
+
+该变量不会传入 OpenClaw overlay，因此不会影响 pnpm。镜像拉取仍由 Docker daemon 的代理负责；
+若 7890 是 mixed/HTTP 代理端口，`HTTP_PROXY` 和 `HTTPS_PROXY` 都应使用 `http://...:7890`，不要把
+`HTTPS_PROXY` 写成 `https://...:7890`。
+
+构建后确认 baseline 的 image ID 没有变化：
+
+```bash
+docker image inspect \
+  openclaw-baseline:2026.6.11-srcsnap \
+  openclaw-router-gateway:2026.6.11-overlay \
+  openclaw-router-api:2026.6.11 \
+  --format '{{.RepoTags}} {{.Id}} {{.Size}}'
+
+docker run --rm openclaw-baseline:2026.6.11-srcsnap openclaw --version
+docker run --rm openclaw-router-gateway:2026.6.11-overlay openclaw --version
+```
+
+### 16.2 Router 单数据集完整配置
+
+下面以 GSM8K 为例。三个 tier 的值必须与 `EVALSCOPE_ROUTER_MODEL_ROUTES` 的三个 key 对应；
+`api_key_env` 保存环境变量名称，不把密钥写进 JSON、源码或镜像层。
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate agentscope
+
+export OPENCLAW_ROUTER_ENABLED=true
+export OPENCLAW_ROUTER_GATEWAY_IMAGE=openclaw-router-gateway:2026.6.11-overlay
+export OPENCLAW_ROUTER_API_IMAGE=openclaw-router-api:2026.6.11
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-router-gsm8k
+export OPENCLAW_GATEWAY_PORT=18889
+export OPENCLAW_EVAL_STATE_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/router/gsm8k/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/router/gsm8k/secrets"
+
+export OPENCLAW_ROUTER_TIERS='{
+  "small": "qwen-flash",
+  "mid": "qwen-plus",
+  "large": "qwen-max"
+}'
+
+export EVALSCOPE_ROUTER_MODEL_ROUTES='{
+  "qwen-flash": {
+    "model_id": "qwen3.6-flash",
+    "eval_type": "openai_api",
+    "api_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "generation_config": {"temperature": 0, "max_tokens": 2048},
+    "openclaw_model": {
+      "reasoning": false,
+      "contextWindow": 131072,
+      "maxTokens": 2048,
+      "cost": {"input": 1, "output": 4, "cacheRead": 0.2, "cacheWrite": 1}
+    }
+  },
+  "qwen-plus": {
+    "model_id": "qwen3.7-plus",
+    "eval_type": "openai_api",
+    "api_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "generation_config": {"temperature": 0, "max_tokens": 2048},
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": 2048,
+      "cost": {"input": 3, "output": 12, "cacheRead": 0.6, "cacheWrite": 3}
+    }
+  },
+  "qwen-max": {
+    "model_id": "qwen3.7-max",
+    "eval_type": "openai_api",
+    "api_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "generation_config": {"temperature": 0, "max_tokens": 2048},
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": 2048,
+      "cost": {"input": 10, "output": 40, "cacheRead": 2, "cacheWrite": 10}
+    }
+  }
+}'
+
+export EVALSCOPE_API_KEY='替换为服务器环境中的真实密钥'
+export EVALSCOPE_API_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+export EVALSCOPE_EVAL_TYPE=openai_api
+export EVALSCOPE_MODEL=qwen3.7-max
+export EVALSCOPE_MODEL_ID=openclaw_router_qwen_gsm8k
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=5
+export EVALSCOPE_BATCH_SIZE=1
+export EVALSCOPE_TEMPERATURE=0
+export EVALSCOPE_MAX_TOKENS=2048
+export EVALSCOPE_JUDGE_STRATEGY=rule
+export EVALSCOPE_COST_CURRENCY=CNY
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+上面的 `cost` 单位是每百万 token 的价格，数字仅用于展示配置格式，必须替换为实际供应商价格。
+Router 模式会按每次 bridge trace 中真正选择的模型分别计费；不能用单一模型价格乘总 token 来代替。
+
+入口会自动合并：
+
+```text
+docker-compose.evalscope.yml + docker-compose.router.yml
+```
+
+也可以先手动启动并检查服务：
+
+```bash
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -f openclaw_evalscope_cli/docker-compose.router.yml \
+  -p "$OPENCLAW_COMPOSE_PROJECT" \
+  up -d openclaw-gateway
+
+docker compose \
+  -f openclaw_evalscope_cli/docker-compose.evalscope.yml \
+  -f openclaw_evalscope_cli/docker-compose.router.yml \
+  -p "$OPENCLAW_COMPOSE_PROJECT" \
+  ps
+
+curl -fsS "http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}/healthz"
+```
+
+### 16.3 Baseline 是否受影响
+
+不设置或显式关闭 Router 即回到原有单模型路径：
+
+```bash
+unset OPENCLAW_ROUTER_ENABLED
+export OPENCLAW_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-baseline-gsm8k
+export OPENCLAW_GATEWAY_PORT=18789
+export OPENCLAW_EVAL_STATE_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/baseline/gsm8k/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/baseline/gsm8k/secrets"
+export EVALSCOPE_MODEL_ID=openclaw_baseline_qwen_gsm8k
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+baseline 和 Router 必须使用不同的 Compose project、端口、state 和 secrets。两者共享只读镜像层没有
+问题，但不能共享可写 OpenClaw state，否则 provider、session 和插件配置会相互覆盖。
+
+### 16.4 结果与开销口径
+
+每次运行都会在带模型 ID、数据集和时间戳的目录生成 `experiment_report.json`。Router 报告新增：
+
+- `routing.calls_by_model`：各目标模型的真实调用次数。
+- `routing.calls_by_tier`：small/mid/large 的选择分布。
+- `results.task_results[].model_calls`：每次调用的 requested/resolved model、token 和费用。
+- `cost_estimate.cost_by_model`：按目标模型聚合的估算金额，以及每任务 min/mean/max。
+- `openclaw_runtime_metrics.prometheus_counter_delta`：OpenClaw 自带 diagnostics exporter 的 run、
+  model call、harness、queue 和 tool 等指标增量。
+
+OpenClaw 原生 Prometheus 指标中的 model 标签记录入口模型 `router-entry`，适合衡量 harness 总运行、
+调用次数、队列等待和工具活动；真正路由到哪个模型以及该模型的 token/费用，应以 EvalScope bridge trace
+为准。两套数据互相补充，不应把 Prometheus 的入口模型标签误当成路由结果。
+
+金额仍是可复现的模型 token 价格估算，不是账单。Judge、`analysis_report`、外部工具服务、套餐优惠、
+税费等不在该数值中。需要实付金额时，使用同一时间窗口和请求标识与供应商 billing API/账单对账。
+
+### 16.5 已知兼容事项
+
+- 当前 Router 模型 pickle 来自较旧 XGBoost 版本；XGBoost 3.3 可以加载，但会打印序列化兼容警告。
+  长期方案是在原训练版本中用 `Booster.save_model()` 导出稳定格式后重新打包。
+- Router API 默认 `EMBEDDING_MODE=hash`，镜像轻且已完成 smoke。正式实验前必须确认训练模型使用的
+  embedding 与该模式一致；若训练使用 BGE，设置 `OPENCLAW_ROUTER_INSTALL_BGE=1` 重新构建 Router API，
+  并以 `OPENCLAW_ROUTER_EMBEDDING_MODE=bge` 启动。
+- Router v1 强制 `EVALSCOPE_BATCH_SIZE=1`。并发数据集应像第 14.7 节一样使用独立 Gateway、端口和
+  state；不要在同一 Gateway 上并发覆盖 trial bridge token。
+
+### 16.6 五个 Router 数据集脚本
+
+Router 模式提供五个与 baseline 数据集配置对应的完整入口：
+
+| 脚本 | 数据集 | 默认 limit | Gateway 端口 |
+|---|---|---:|---:|
+| `Scripts/router_mmlu_pro.sh` | MMLU-Pro `computer science` | 5 | 18911 |
+| `Scripts/router_gpqa_diamond.sh` | GPQA Diamond | 5 | 18912 |
+| `Scripts/router_longmemeval.sh` | LongMemEval `s` | 1 | 18913 |
+| `Scripts/router_acebench.sh` | ACEBench `agent` | 50 | 18914 |
+| `Scripts/router_locomo.sh` | LoCoMo `qa` | 1 | 18915 |
+
+每个脚本都会自行完成：
+
+```text
+激活 conda agentscope
+检查两个 Router 镜像
+创建唯一 Compose project
+在 /tmp 创建唯一 OpenClaw state/secrets
+用 flock 阻止同一数据集重复运行
+合并 baseline + router Compose
+启动 Router API 和 Gateway
+等待 /healthz
+运行 python run.py
+失败时打印 Gateway/Router API 日志
+结束后清理本次 Compose 容器
+```
+
+OpenClaw SQLite state 固定使用服务器本地临时盘：
+
+```text
+/tmp/openclaw-eval/<user>/router/<dataset>/<run-id>/
+```
+
+不会再把 SQLite 放到 `/home/featurize/work`。EvalScope 数据集和模型缓存使用：
+
+```text
+EVALSCOPE_DATASET_DIR=/home/featurize/data
+MODELSCOPE_CACHE=/home/featurize/data/modelscope-cache
+HF_HOME=/home/featurize/data/huggingface-cache
+```
+
+评测输出仍保存在：
+
+```text
+outputs/router/<model-id>__<dataset>/<timestamp>/
+```
+
+单独运行示例：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+bash Scripts/router_acebench.sh
+```
+
+临时覆盖样本数：
+
+```bash
+EVALSCOPE_LIMIT=2 bash Scripts/router_acebench.sh
+```
+
+五个数据集并行：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+tmux new-session -d -s openclaw-router-evals -n mmlu-pro \
+  "cd '$PWD' && bash Scripts/router_mmlu_pro.sh"
+tmux new-window -t openclaw-router-evals -n gpqa \
+  "cd '$PWD' && bash Scripts/router_gpqa_diamond.sh"
+tmux new-window -t openclaw-router-evals -n longmemeval \
+  "cd '$PWD' && bash Scripts/router_longmemeval.sh"
+tmux new-window -t openclaw-router-evals -n acebench \
+  "cd '$PWD' && bash Scripts/router_acebench.sh"
+tmux new-window -t openclaw-router-evals -n locomo \
+  "cd '$PWD' && bash Scripts/router_locomo.sh"
+tmux set-option -t openclaw-router-evals remain-on-exit on
+tmux attach -t openclaw-router-evals
+```
+
+脚本默认使用 `qwen3.6-flash`、`qwen3.7-plus`、`qwen3.7-max` 三个 tier。可在启动前覆盖：
+
+```bash
+export OPENCLAW_ROUTER_SMALL_MODEL=<small-model-id>
+export OPENCLAW_ROUTER_MID_MODEL=<mid-model-id>
+export OPENCLAW_ROUTER_LARGE_MODEL=<large-model-id>
+```
+
+默认执行结束后会关闭本次 Gateway 和 Router API。需要保留容器排查时设置：
+
+```bash
+OPENCLAW_ROUTER_KEEP_CONTAINERS=true bash Scripts/router_acebench.sh
+```
+
+`/home/featurize/data` 必须已存在且当前用户可写；脚本会在启动模型请求前检查这一条件。
+若服务器需要改用另一个本地数据盘，只设置 Router 专用变量
+`OPENCLAW_ROUTER_DATASET_DIR`、`OPENCLAW_ROUTER_MODELSCOPE_CACHE` 和
+`OPENCLAW_ROUTER_HF_HOME`，不要复用 baseline 的 state/output 覆盖变量。

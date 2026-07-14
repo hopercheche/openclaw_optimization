@@ -1,0 +1,37 @@
+services:
+  openclaw-router-api:
+    image: ${OPENCLAW_ROUTER_API_IMAGE:-openclaw-router-api:local}
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      EMBEDDING_MODE: ${OPENCLAW_ROUTER_EMBEDDING_MODE:-hash}
+      ROUTER_API_KEY: ${OPENCLAW_ROUTER_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  openclaw-gateway:
+    image: ${OPENCLAW_ROUTER_GATEWAY_IMAGE:-openclaw-router-gateway:local}
+    environment:
+      OPENCLAW_ROUTER_API_KEY: ${OPENCLAW_ROUTER_API_KEY:-}
+    depends_on:
+      openclaw-router-api:
+        condition: service_healthy
+
+  openclaw-cli:
+    image: ${OPENCLAW_ROUTER_GATEWAY_IMAGE:-openclaw-router-gateway:local}
+    environment:
+      OPENCLAW_ROUTER_API_KEY: ${OPENCLAW_ROUTER_API_KEY:-}
+    depends_on:
+      openclaw-router-api:
+        condition: service_healthy

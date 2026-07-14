@@ -41,6 +41,145 @@ If Docker cannot pull base images through the proxy, configure the Docker
 daemon or Docker client proxy as well; build args only affect build steps after
 the base image is available.
 
+## Router Overlay Images
+
+The Router experiment does not rebuild OpenClaw. It creates two independent
+images on top of the existing baseline:
+
+- `openclaw-router-gateway`: the baseline image plus the Router provider plugin
+  and OpenClaw's official Prometheus diagnostics extension.
+- `openclaw-router-api`: the Python XGBoost routing sidecar and its model/PCA
+  artifacts.
+
+Build both images from the repository root:
+
+```bash
+export OPENCLAW_ROUTER_BASE_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_ROUTER_GATEWAY_IMAGE=openclaw-router-gateway:2026.6.11-overlay
+export OPENCLAW_ROUTER_API_IMAGE=openclaw-router-api:2026.6.11
+
+bash openclaw_evalscope_cli/build_router_images.sh
+```
+
+The Gateway overlay Dockerfile only creates directories and copies files. It
+does not run `pnpm install`, `npm install`, or rebuild OpenClaw. The Router API
+uses the Aliyun PyPI mirror by default. If only its `apt`/`pip` build steps need
+an HTTP proxy, set:
+
+```bash
+PROXY_HOST="$(ip route show default | awk '{print $3}')"
+export OPENCLAW_ROUTER_BUILD_HTTP_PROXY="http://${PROXY_HOST}:7890"
+bash openclaw_evalscope_cli/build_router_images.sh
+```
+
+That variable is passed only to the Router API build. It is deliberately not
+passed to the OpenClaw overlay, so no pnpm command can inherit it. Base-image
+pulls use the Docker daemon's own proxy configuration.
+
+Confirm that the baseline itself was not replaced:
+
+```bash
+docker image inspect \
+  openclaw-baseline:2026.6.11-srcsnap \
+  openclaw-router-gateway:2026.6.11-overlay \
+  --format '{{.RepoTags}} {{.Id}} {{.Size}}'
+```
+
+Use separate Compose projects, ports, state, and secret directories for a
+baseline/Router comparison. Never point both experiments at the same OpenClaw
+state directory.
+
+## Router EvalScope Run
+
+Router mode adds `docker-compose.router.yml` automatically and keeps strict
+bridge routing enabled. The tier values must be keys in
+`EVALSCOPE_ROUTER_MODEL_ROUTES`:
+
+```bash
+export OPENCLAW_ROUTER_ENABLED=true
+export OPENCLAW_ROUTER_GATEWAY_IMAGE=openclaw-router-gateway:2026.6.11-overlay
+export OPENCLAW_ROUTER_API_IMAGE=openclaw-router-api:2026.6.11
+export OPENCLAW_COMPOSE_PROJECT=openclaw-eval-router-gsm8k
+export OPENCLAW_GATEWAY_PORT=18889
+export OPENCLAW_EVAL_STATE_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/router/gsm8k/state"
+export OPENCLAW_EVAL_SECRET_DIR="$PWD/openclaw_evalscope_cli/.openclaw-eval/router/gsm8k/secrets"
+
+export OPENCLAW_ROUTER_TIERS='{
+  "small": "qwen-flash",
+  "mid": "qwen-plus",
+  "large": "qwen-max"
+}'
+
+export EVALSCOPE_ROUTER_MODEL_ROUTES='{
+  "qwen-flash": {
+    "model_id": "qwen3.6-flash",
+    "eval_type": "openai_api",
+    "api_url": "https://example.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "openclaw_model": {
+      "reasoning": false,
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "cost": {"input": 1, "output": 4, "cacheRead": 0.2, "cacheWrite": 1}
+    }
+  },
+  "qwen-plus": {
+    "model_id": "qwen3.7-plus",
+    "eval_type": "openai_api",
+    "api_url": "https://example.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "cost": {"input": 3, "output": 12, "cacheRead": 0.6, "cacheWrite": 3}
+    }
+  },
+  "qwen-max": {
+    "model_id": "qwen3.7-max",
+    "eval_type": "openai_api",
+    "api_url": "https://example.com/compatible-mode/v1",
+    "api_key_env": "EVALSCOPE_API_KEY",
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": 8192,
+      "cost": {"input": 10, "output": 40, "cacheRead": 2, "cacheWrite": 10}
+    }
+  }
+}'
+
+export EVALSCOPE_MODEL=qwen3.7-max
+export EVALSCOPE_MODEL_ID=openclaw_router_gsm8k
+export EVALSCOPE_EVAL_TYPE=openai_api
+export EVALSCOPE_API_URL=https://example.com/compatible-mode/v1
+export EVALSCOPE_API_KEY='...'
+export EVALSCOPE_DATASET=gsm8k
+export EVALSCOPE_LIMIT=5
+export EVALSCOPE_BATCH_SIZE=1
+export EVALSCOPE_JUDGE_STRATEGY=rule
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+The `cost` values are prices per million tokens, not benchmark weights. Replace
+the example values with the provider's current prices. Router mode calculates
+cost per bridge call using the model actually selected; it does not apply the
+single-model `EVALSCOPE_INPUT_PRICE_PER_MILLION` setting.
+
+The final `experiment_report.json` contains:
+
+- `routing.calls_by_model` and `routing.calls_by_tier`.
+- Per-task `model_calls` with requested/resolved model and usage.
+- `cost_estimate.cost_by_model` plus task min/mean/max cost.
+- `openclaw_runtime_metrics.prometheus_counter_delta` from OpenClaw's own
+  diagnostics exporter.
+
+OpenClaw's Prometheus labels describe the original `router-entry` harness
+model. Use the EvalScope bridge trace as the source of truth for the selected
+target model and per-model token cost. Judge, analysis-report, subscription,
+tax, and external tool-service charges are excluded.
+
 ## Compose Expectations
 
 The default example uses

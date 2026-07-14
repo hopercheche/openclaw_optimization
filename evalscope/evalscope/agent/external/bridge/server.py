@@ -14,7 +14,7 @@ import time
 import uuid
 from aiohttp import web
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from evalscope.api.model import GenerateConfig, Model
@@ -112,6 +112,8 @@ class TrialSession:
         model: Model,
         recorder: BridgeTraceRecorder,
         framework: str,
+        model_routes: Optional[Mapping[str, Model]] = None,
+        strict_model_routing: bool = False,
     ) -> None:
         self.trial_id = trial_id
         self.token = token
@@ -119,6 +121,19 @@ class TrialSession:
         self.model = model
         self.recorder = recorder
         self.framework = framework
+        self.model_routes = dict(model_routes or {})
+        self.strict_model_routing = strict_model_routing
+
+    def resolve_model(self, request_model: Optional[str]) -> Model:
+        """Resolve an exact request model id, preserving legacy fallback."""
+        if request_model and request_model in self.model_routes:
+            return self.model_routes[request_model]
+        if self.strict_model_routing:
+            available = ', '.join(sorted(self.model_routes)) or '<none>'
+            raise _BridgeModelRouteError(
+                f'unknown bridge request model {request_model!r}; available: {available}'
+            )
+        return self.model
 
     def endpoint_view(self, for_env: 'Optional[AgentEnvironment]' = None) -> BridgeEndpoint:
         """Return the runner-facing view (base_url + trial_token).
@@ -292,6 +307,8 @@ class ModelProxyServer:
         self,
         model: Model,
         framework: str,
+        model_routes: Optional[Mapping[str, Model]] = None,
+        strict_model_routing: bool = False,
     ) -> AsyncIterator[TrialSession]:
         """Register a trial → model mapping for the duration of the run.
 
@@ -312,6 +329,8 @@ class ModelProxyServer:
             model=model,
             recorder=recorder,
             framework=framework,
+            model_routes=model_routes,
+            strict_model_routing=strict_model_routing,
         )
         async with self._sessions_lock:
             self._sessions[trial_id] = session
@@ -344,6 +363,8 @@ class ModelProxyServer:
             )
 
         body = await request.json()
+        if route_error := self._validate_model_route(session, body, protocol='anthropic'):
+            return route_error
         chat_messages = anthropic_request_to_messages(body)
         tool_infos = anthropic_tools_to_tool_infos(body.get('tools') or [])
         gen_config = _build_generate_config(body)
@@ -362,6 +383,8 @@ class ModelProxyServer:
             return session
 
         body = await request.json()
+        if route_error := self._validate_model_route(session, body, protocol='openai'):
+            return route_error
         chat_messages = openai_request_to_messages(body)
         tool_infos = openai_tools_to_tool_infos(body.get('tools') or [])
         tool_choice = openai_tool_choice(body.get('tool_choice'))
@@ -386,8 +409,9 @@ class ModelProxyServer:
         gen_config: 'GenerateConfig',
     ) -> web.StreamResponse:
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         try:
-            output = await session.model.generate_async(
+            output = await routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
@@ -404,7 +428,9 @@ class ModelProxyServer:
             )
 
         latency_ms = (time.monotonic() - started) * 1000
-        session.recorder.record_openai_turn(body, output, latency_ms=latency_ms)
+        session.recorder.record_openai_turn(
+            body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+        )
         _log_turn(session, output, latency_ms, mode='json')
         return web.json_response(model_output_to_openai_response(output, request_model=body.get('model')))
 
@@ -422,8 +448,9 @@ class ModelProxyServer:
         response = await self._prepare_sse_response(request)
 
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         generate_task = asyncio.create_task(
-            session.model.generate_async(
+            routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
@@ -439,7 +466,9 @@ class ModelProxyServer:
                 await response.write(chunk)
             output = await generate_task
             latency_ms = (time.monotonic() - started) * 1000
-            session.recorder.record_openai_turn(body, output, latency_ms=latency_ms)
+            session.recorder.record_openai_turn(
+                body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+            )
             _log_turn(session, output, latency_ms, mode='stream')
         except Exception as exc:  # pragma: no cover - upstream-dependent
             _log_upstream_failure(session, exc, mode='stream')
@@ -467,6 +496,8 @@ class ModelProxyServer:
             return session
 
         body = await request.json()
+        if route_error := self._validate_model_route(session, body, protocol='openai'):
+            return route_error
         warn_unsupported_previous_response_id(body)
         chat_messages = responses_request_to_messages(body)
         tool_infos = responses_tools_to_tool_infos(body.get('tools') or [])
@@ -489,8 +520,9 @@ class ModelProxyServer:
         gen_config: 'GenerateConfig',
     ) -> web.StreamResponse:
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         try:
-            output = await session.model.generate_async(
+            output = await routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
@@ -507,7 +539,9 @@ class ModelProxyServer:
             )
 
         latency_ms = (time.monotonic() - started) * 1000
-        session.recorder.record_responses_turn(body, output, latency_ms=latency_ms)
+        session.recorder.record_responses_turn(
+            body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+        )
         _log_turn(session, output, latency_ms, mode='json')
         return web.json_response(model_output_to_responses_payload(output, request_model=body.get('model')))
 
@@ -532,15 +566,18 @@ class ModelProxyServer:
         response = await self._prepare_sse_response(request)
 
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         try:
-            output = await session.model.generate_async(
+            output = await routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
                 config=gen_config,
             )
             latency_ms = (time.monotonic() - started) * 1000
-            session.recorder.record_responses_turn(body, output, latency_ms=latency_ms)
+            session.recorder.record_responses_turn(
+                body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+            )
             _log_turn(session, output, latency_ms, mode='stream')
             payload = model_output_to_responses_payload(output, request_model=body.get('model'))
             async for chunk in stream_responses_payload(payload):
@@ -593,6 +630,8 @@ class ModelProxyServer:
         model_name = extract_model_from_path(path)
         # Inject model name into body for downstream use
         body['model'] = model_name
+        if route_error := self._validate_model_route(session, body, protocol='gemini'):
+            return route_error
 
         chat_messages = gemini_request_to_messages(body)
         tool_infos = gemini_tools_to_tool_infos(body.get('tools') or [])
@@ -616,8 +655,9 @@ class ModelProxyServer:
         gen_config: 'GenerateConfig',
     ) -> web.StreamResponse:
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         try:
-            output = await session.model.generate_async(
+            output = await routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
@@ -635,7 +675,9 @@ class ModelProxyServer:
             )
 
         latency_ms = (time.monotonic() - started) * 1000
-        session.recorder.record_gemini_turn(body, output, latency_ms=latency_ms)
+        session.recorder.record_gemini_turn(
+            body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+        )
         _log_turn(session, output, latency_ms, mode='json')
         return web.json_response(model_output_to_gemini_response(output, request_model=body.get('model')))
 
@@ -653,8 +695,9 @@ class ModelProxyServer:
         response = await self._prepare_sse_response(request)
 
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         generate_task = asyncio.create_task(
-            session.model.generate_async(
+            routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 tool_choice=tool_choice,
@@ -666,7 +709,9 @@ class ModelProxyServer:
                 await response.write(chunk)
             output = await generate_task
             latency_ms = (time.monotonic() - started) * 1000
-            session.recorder.record_gemini_turn(body, output, latency_ms=latency_ms)
+            session.recorder.record_gemini_turn(
+                body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+            )
             _log_turn(session, output, latency_ms, mode='stream')
         except Exception as exc:
             _log_upstream_failure(session, exc, mode='stream')
@@ -690,8 +735,9 @@ class ModelProxyServer:
         gen_config: 'GenerateConfig',
     ) -> web.StreamResponse:
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         try:
-            output = await session.model.generate_async(
+            output = await routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 config=gen_config,
@@ -710,7 +756,9 @@ class ModelProxyServer:
             )
 
         latency_ms = (time.monotonic() - started) * 1000
-        session.recorder.record_anthropic_turn(body, output, latency_ms=latency_ms)
+        session.recorder.record_anthropic_turn(
+            body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+        )
         _log_turn(session, output, latency_ms, mode='json')
         return web.json_response(model_output_to_anthropic_response(output, request_model=body.get('model')))
 
@@ -732,8 +780,9 @@ class ModelProxyServer:
         response = await self._prepare_sse_response(request)
 
         started = time.monotonic()
+        routed_model = session.resolve_model(body.get('model'))
         generate_task = asyncio.create_task(
-            session.model.generate_async(
+            routed_model.generate_async(
                 input=chat_messages,
                 tools=tool_infos or None,
                 config=gen_config,
@@ -746,7 +795,9 @@ class ModelProxyServer:
             # because the streamer already drained it.
             output = await generate_task
             latency_ms = (time.monotonic() - started) * 1000
-            session.recorder.record_anthropic_turn(body, output, latency_ms=latency_ms)
+            session.recorder.record_anthropic_turn(
+                body, output, latency_ms=latency_ms, resolved_model=getattr(routed_model, 'name', None)
+            )
             _log_turn(session, output, latency_ms, mode='stream')
         except Exception as exc:  # pragma: no cover - upstream-dependent
             _log_upstream_failure(session, exc, mode='stream')
@@ -764,6 +815,33 @@ class ModelProxyServer:
                 generate_task.cancel()
         await response.write_eof()
         return response
+
+    @staticmethod
+    def _validate_model_route(
+        session: TrialSession,
+        body: Dict[str, Any],
+        *,
+        protocol: str,
+    ) -> Optional[web.Response]:
+        try:
+            session.resolve_model(body.get('model'))
+        except _BridgeModelRouteError as exc:
+            logger.warning(f'bridge: model routing rejected request: {exc}')
+            if protocol == 'anthropic':
+                return web.json_response(
+                    {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': str(exc)}},
+                    status=400,
+                )
+            if protocol == 'gemini':
+                return web.json_response(
+                    {'error': {'code': 400, 'message': str(exc), 'status': 'INVALID_ARGUMENT'}},
+                    status=400,
+                )
+            return web.json_response(
+                {'error': {'type': 'invalid_request_error', 'code': 'unknown_model', 'message': str(exc)}},
+                status=400,
+            )
+        return None
 
     async def _auth_check_openai(self, request: web.Request) -> 'TrialSession | web.Response':
         """Look up the trial session; return a 401 :class:`web.Response` with
@@ -816,6 +894,10 @@ class ModelProxyServer:
 
 
 class _BridgeAuthError(Exception):
+    pass
+
+
+class _BridgeModelRouteError(Exception):
     pass
 
 

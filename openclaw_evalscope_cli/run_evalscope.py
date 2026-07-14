@@ -71,7 +71,7 @@ def _env_json_object(name: str) -> dict[str, Any] | None:
         raise ValueError(f"{name} must be a valid JSON object: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{name} must decode to a JSON object")
-    if "model" in value and "model_id" not in value:
+    if name == "EVALSCOPE_JUDGE_MODEL_ARGS" and "model" in value and "model_id" not in value:
         raise ValueError(f'{name} uses "model_id", not "model", for the judge model name')
     return value
 
@@ -118,7 +118,72 @@ def _default_compose_files() -> list[str]:
     raw = _env_list("OPENCLAW_COMPOSE_FILES")
     if raw:
         return raw
-    return [str(Path(__file__).resolve().with_name("docker-compose.evalscope.yml"))]
+    files = [str(Path(__file__).resolve().with_name("docker-compose.evalscope.yml"))]
+    if _env_bool("OPENCLAW_ROUTER_ENABLED", False):
+        files.append(str(Path(__file__).resolve().with_name("docker-compose.router.yml")))
+    return files
+
+
+def _build_router_config(
+    *,
+    generation_config: dict[str, Any],
+    default_eval_type: str,
+    default_api_url: str | None,
+) -> tuple[dict[str, Any], dict[str, str], list[dict[str, Any]]]:
+    routes = _env_json_object("EVALSCOPE_ROUTER_MODEL_ROUTES") or {}
+    tiers = _env_json_object("OPENCLAW_ROUTER_TIERS") or {}
+    if set(tiers) != {"small", "mid", "large"}:
+        raise ValueError("OPENCLAW_ROUTER_TIERS must contain exactly small, mid, and large")
+    unknown_targets = set(tiers.values()) - set(routes)
+    if unknown_targets:
+        raise ValueError(
+            "OPENCLAW_ROUTER_TIERS references models missing from "
+            f"EVALSCOPE_ROUTER_MODEL_ROUTES: {sorted(unknown_targets)}"
+        )
+
+    bridge_routes: dict[str, Any] = {}
+    openclaw_models: list[dict[str, Any]] = []
+    for request_model, raw_route in routes.items():
+        if not isinstance(raw_route, dict):
+            raise ValueError(f"router model route {request_model!r} must be an object")
+        eval_type = str(raw_route.get("eval_type") or default_eval_type)
+        bridge_route: dict[str, Any] = {
+            "model_id": str(raw_route.get("model_id") or request_model),
+            "eval_type": eval_type,
+            "generation_config": _deep_merge(
+                generation_config,
+                raw_route.get("generation_config") or {},
+            ),
+            "model_args": raw_route.get("model_args") or {},
+        }
+        route_api_url = raw_route.get("api_url") or default_api_url
+        if route_api_url:
+            bridge_route["api_url"] = route_api_url
+        api_key_env = raw_route.get("api_key_env")
+        if api_key_env:
+            bridge_route["api_key_env"] = str(api_key_env)
+        elif eval_type not in {"mock_llm", "mock_llm_with_sleep"} and os.getenv("EVALSCOPE_API_KEY"):
+            bridge_route["api_key_env"] = "EVALSCOPE_API_KEY"
+        bridge_routes[str(request_model)] = bridge_route
+
+        model_config = raw_route.get("openclaw_model") or {}
+        if not isinstance(model_config, dict):
+            raise ValueError(f"router route {request_model!r}.openclaw_model must be an object")
+        openclaw_models.append({
+            "id": str(request_model),
+            "name": str(model_config.get("name") or request_model),
+            "reasoning": bool(model_config.get("reasoning", True)),
+            "input": model_config.get("input") or ["text"],
+            "cost": model_config.get("cost") or {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+            },
+            "contextWindow": int(model_config.get("contextWindow", 131072)),
+            "maxTokens": int(model_config.get("maxTokens", generation_config.get("max_tokens") or 8192)),
+        })
+    return bridge_routes, {key: str(value) for key, value in tiers.items()}, openclaw_models
 
 
 def build_task_config() -> dict[str, Any]:
@@ -163,6 +228,21 @@ def build_task_config() -> dict[str, Any]:
         },
         _env_json_object("EVALSCOPE_GENERATION_CONFIG") or {},
     )
+    router_enabled = _env_bool("OPENCLAW_ROUTER_ENABLED", False)
+    bridge_routes: dict[str, Any] = {}
+    router_tiers: dict[str, str] = {}
+    router_models: list[dict[str, Any]] = []
+    if router_enabled:
+        bridge_routes, router_tiers, router_models = _build_router_config(
+            generation_config=generation_config,
+            default_eval_type=eval_type,
+            default_api_url=api_url,
+        )
+        state_root = Path.cwd() / "openclaw_evalscope_cli" / ".openclaw-eval"
+        os.environ.setdefault("OPENCLAW_EVAL_STATE_DIR", str(state_root / "router-state"))
+        os.environ.setdefault("OPENCLAW_EVAL_SECRET_DIR", str(state_root / "router-secrets"))
+        Path(os.environ["OPENCLAW_EVAL_STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["OPENCLAW_EVAL_SECRET_DIR"]).mkdir(parents=True, exist_ok=True)
     agent_config = _deep_merge(
         {
             "mode": "external",
@@ -170,16 +250,33 @@ def build_task_config() -> dict[str, Any]:
             "environment": os.getenv("EVALSCOPE_AGENT_ENVIRONMENT", "local"),
             "bridge": {
                 "proxy_host": os.getenv("EVALSCOPE_BRIDGE_PROXY_HOST", "0.0.0.0"),
+                "strict_model_routing": router_enabled,
+                "model_routes": bridge_routes,
             },
             "timeout": _env_float("EVALSCOPE_AGENT_TIMEOUT", 600.0),
             "kwargs": {
-                "compose_project": os.getenv("OPENCLAW_COMPOSE_PROJECT", "openclaw-eval-baseline"),
+                "compose_project": os.getenv(
+                    "OPENCLAW_COMPOSE_PROJECT",
+                    "openclaw-eval-router" if router_enabled else "openclaw-eval-baseline",
+                ),
                 "compose_files": _default_compose_files(),
                 "compose_dir": os.getenv("OPENCLAW_COMPOSE_DIR") or None,
                 "gateway_service": os.getenv("OPENCLAW_GATEWAY_SERVICE", "openclaw-gateway"),
                 "cli_service": os.getenv("OPENCLAW_CLI_SERVICE", "openclaw-cli"),
                 "agent_id": os.getenv("OPENCLAW_AGENT_ID", "main"),
                 "protocol": os.getenv("OPENCLAW_EVAL_PROTOCOL", "responses"),
+                "router_enabled": router_enabled,
+                "router_service": os.getenv("OPENCLAW_ROUTER_SERVICE", "openclaw-router-api"),
+                "router_endpoint": os.getenv(
+                    "OPENCLAW_ROUTER_ENDPOINT", "http://openclaw-router-api:3000"
+                ),
+                "router_entry_model": os.getenv("OPENCLAW_ROUTER_ENTRY_MODEL", "router-entry"),
+                "router_tiers": router_tiers,
+                "router_models": router_models,
+                "router_confidence_threshold": _env_float("OPENCLAW_ROUTER_CONFIDENCE_THRESHOLD", 0.5),
+                "router_request_timeout_ms": _env_int("OPENCLAW_ROUTER_REQUEST_TIMEOUT_MS", 5000),
+                "router_strict": _env_bool("OPENCLAW_ROUTER_STRICT", True),
+                "router_collect_metrics": _env_bool("OPENCLAW_ROUTER_COLLECT_METRICS", True),
                 "bridge_host_for_container": os.getenv(
                     "OPENCLAW_BRIDGE_HOST_FOR_CONTAINER", "host.docker.internal"
                 ),
@@ -196,7 +293,10 @@ def build_task_config() -> dict[str, Any]:
 
     cfg: dict[str, Any] = {
         "model": model_name,
-        "model_id": os.getenv("EVALSCOPE_MODEL_ID", "openclaw_cli_harness"),
+        "model_id": os.getenv(
+            "EVALSCOPE_MODEL_ID",
+            "openclaw_router_harness" if router_enabled else "openclaw_cli_harness",
+        ),
         "eval_type": eval_type,
         "datasets": datasets,
         "dataset_args": dataset_args,
@@ -215,6 +315,8 @@ def build_task_config() -> dict[str, Any]:
         "no_timestamp": _env_bool("EVALSCOPE_NO_TIMESTAMP", False),
         "enable_progress_tracker": _env_bool("EVALSCOPE_ENABLE_PROGRESS_TRACKER", False),
     }
+    if router_enabled and cfg["eval_batch_size"] != 1:
+        raise ValueError("OpenClaw router v1 requires EVALSCOPE_BATCH_SIZE=1")
 
     dataset_dir = os.getenv("EVALSCOPE_DATASET_DIR")
     dataset_hub = os.getenv("EVALSCOPE_DATASET_HUB")
