@@ -148,6 +148,7 @@ run_router_eval() {
   export EVALSCOPE_TEMPERATURE="${EVALSCOPE_TEMPERATURE:-0.0}"
   export EVALSCOPE_MAX_TOKENS="${EVALSCOPE_MAX_TOKENS:-2048}"
   export EVALSCOPE_STREAM=false
+  export EVALSCOPE_COST_CURRENCY="${EVALSCOPE_COST_CURRENCY:-USD}"
   export EVALSCOPE_DATASET_DIR="${OPENCLAW_ROUTER_DATASET_DIR:-/home/featurize/data}"
   export EVALSCOPE_DATASET_HUB="${EVALSCOPE_DATASET_HUB:-modelscope}"
   export MODELSCOPE_CACHE="${OPENCLAW_ROUTER_MODELSCOPE_CACHE:-/home/featurize/data/modelscope-cache}"
@@ -165,6 +166,19 @@ run_router_eval() {
   local small_model="${OPENCLAW_ROUTER_SMALL_MODEL:-qwen3.6-plus}"
   local mid_model="${OPENCLAW_ROUTER_MID_MODEL:-qwen3.7-plus}"
   local large_model="${OPENCLAW_ROUTER_LARGE_MODEL:-qwen3.7-max}"
+  # OpenCode Go public prices per 1M tokens, checked 2026-07-15.
+  local small_input_price="${OPENCLAW_ROUTER_SMALL_INPUT_PRICE_PER_MILLION:-0.50}"
+  local small_output_price="${OPENCLAW_ROUTER_SMALL_OUTPUT_PRICE_PER_MILLION:-3.00}"
+  local small_cache_read_price="${OPENCLAW_ROUTER_SMALL_CACHE_READ_PRICE_PER_MILLION:-0.05}"
+  local small_cache_write_price="${OPENCLAW_ROUTER_SMALL_CACHE_WRITE_PRICE_PER_MILLION:-0.625}"
+  local mid_input_price="${OPENCLAW_ROUTER_MID_INPUT_PRICE_PER_MILLION:-0.40}"
+  local mid_output_price="${OPENCLAW_ROUTER_MID_OUTPUT_PRICE_PER_MILLION:-1.60}"
+  local mid_cache_read_price="${OPENCLAW_ROUTER_MID_CACHE_READ_PRICE_PER_MILLION:-0.04}"
+  local mid_cache_write_price="${OPENCLAW_ROUTER_MID_CACHE_WRITE_PRICE_PER_MILLION:-0.50}"
+  local large_input_price="${OPENCLAW_ROUTER_LARGE_INPUT_PRICE_PER_MILLION:-2.50}"
+  local large_output_price="${OPENCLAW_ROUTER_LARGE_OUTPUT_PRICE_PER_MILLION:-7.50}"
+  local large_cache_read_price="${OPENCLAW_ROUTER_LARGE_CACHE_READ_PRICE_PER_MILLION:-0.50}"
+  local large_cache_write_price="${OPENCLAW_ROUTER_LARGE_CACHE_WRITE_PRICE_PER_MILLION:-3.125}"
 
   if [[ -z "${OPENCLAW_ROUTER_TIERS:-}" ]]; then
     export OPENCLAW_ROUTER_TIERS
@@ -184,7 +198,17 @@ JSON
     "api_url": "${EVALSCOPE_API_URL}",
     "api_key_env": "EVALSCOPE_API_KEY",
     "generation_config": {"temperature": ${EVALSCOPE_TEMPERATURE}, "max_tokens": ${EVALSCOPE_MAX_TOKENS}},
-    "openclaw_model": {"reasoning": false, "contextWindow": 131072, "maxTokens": ${EVALSCOPE_MAX_TOKENS}}
+    "openclaw_model": {
+      "reasoning": false,
+      "contextWindow": 131072,
+      "maxTokens": ${EVALSCOPE_MAX_TOKENS},
+      "cost": {
+        "input": ${small_input_price},
+        "output": ${small_output_price},
+        "cacheRead": ${small_cache_read_price},
+        "cacheWrite": ${small_cache_write_price}
+      }
+    }
   },
   "${mid_model}": {
     "model_id": "${mid_model}",
@@ -192,7 +216,17 @@ JSON
     "api_url": "${EVALSCOPE_API_URL}",
     "api_key_env": "EVALSCOPE_API_KEY",
     "generation_config": {"temperature": ${EVALSCOPE_TEMPERATURE}, "max_tokens": ${EVALSCOPE_MAX_TOKENS}},
-    "openclaw_model": {"reasoning": true, "contextWindow": 131072, "maxTokens": ${EVALSCOPE_MAX_TOKENS}}
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": ${EVALSCOPE_MAX_TOKENS},
+      "cost": {
+        "input": ${mid_input_price},
+        "output": ${mid_output_price},
+        "cacheRead": ${mid_cache_read_price},
+        "cacheWrite": ${mid_cache_write_price}
+      }
+    }
   },
   "${large_model}": {
     "model_id": "${large_model}",
@@ -200,7 +234,17 @@ JSON
     "api_url": "${EVALSCOPE_API_URL}",
     "api_key_env": "EVALSCOPE_API_KEY",
     "generation_config": {"temperature": ${EVALSCOPE_TEMPERATURE}, "max_tokens": ${EVALSCOPE_MAX_TOKENS}},
-    "openclaw_model": {"reasoning": true, "contextWindow": 131072, "maxTokens": ${EVALSCOPE_MAX_TOKENS}}
+    "openclaw_model": {
+      "reasoning": true,
+      "contextWindow": 131072,
+      "maxTokens": ${EVALSCOPE_MAX_TOKENS},
+      "cost": {
+        "input": ${large_input_price},
+        "output": ${large_output_price},
+        "cacheRead": ${large_cache_read_price},
+        "cacheWrite": ${large_cache_write_price}
+      }
+    }
   }
 }
 JSON
@@ -255,6 +299,7 @@ JSON
   printf 'EvalScope dataset directory: %s\n' "$EVALSCOPE_DATASET_DIR"
   printf 'EvalScope output root: %s\n' "$EVALSCOPE_OUTPUT_ROOT"
   printf 'Router tiers: small=%s mid=%s large=%s\n' "$small_model" "$mid_model" "$large_model"
+  printf 'Router pricing currency: %s (per 1M tokens)\n' "$EVALSCOPE_COST_CURRENCY"
 
   "${compose_cmd[@]}" up -d openclaw-gateway
 

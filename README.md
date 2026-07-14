@@ -1893,6 +1893,28 @@ export OPENCLAW_ROUTER_MID_MODEL=<mid-model-id>
 export OPENCLAW_ROUTER_LARGE_MODEL=<large-model-id>
 ```
 
+共享脚本内置了 [OpenCode Go 官方价格](https://opencode.ai/docs/go)（核对日期：2026-07-15），
+单位为 USD/百万 token：
+
+| Tier | Model | Input | Output | Cache Read | Cache Write |
+|---|---|---:|---:|---:|---:|
+| small | `qwen3.6-plus` | 0.50 | 3.00 | 0.05 | 0.625 |
+| mid | `qwen3.7-plus` | 0.40 | 1.60 | 0.04 | 0.50 |
+| large | `qwen3.7-max` | 2.50 | 7.50 | 0.50 | 3.125 |
+
+改用其他模型或官方调价后，通过下列同构变量覆盖对应 tier，避免沿用错误价格：
+
+```bash
+export OPENCLAW_ROUTER_SMALL_INPUT_PRICE_PER_MILLION=<price>
+export OPENCLAW_ROUTER_SMALL_OUTPUT_PRICE_PER_MILLION=<price>
+export OPENCLAW_ROUTER_SMALL_CACHE_READ_PRICE_PER_MILLION=<price>
+export OPENCLAW_ROUTER_SMALL_CACHE_WRITE_PRICE_PER_MILLION=<price>
+# MID 和 LARGE 使用相同后缀。
+```
+
+报告中的金额是按实际路由模型和 bridge token trace 计算的用量价值，不包含 Judge、分析报告、
+工具服务、订阅抵扣和税费；OpenCode Go 的实际现金扣款仍以账户 usage/billing 为准。
+
 若目标服务没有实现 `/models`，预检会给出警告并继续。也可以显式关闭：
 
 ```bash
