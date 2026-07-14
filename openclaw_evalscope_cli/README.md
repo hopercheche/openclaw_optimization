@@ -112,7 +112,7 @@ export OPENCLAW_ROUTER_TIERS='{
 
 export EVALSCOPE_ROUTER_MODEL_ROUTES='{
   "qwen-flash": {
-    "model_id": "qwen3.6-flash",
+    "model_id": "qwen3.6-plus",
     "eval_type": "openai_api",
     "api_url": "https://example.com/compatible-mode/v1",
     "api_key_env": "EVALSCOPE_API_KEY",

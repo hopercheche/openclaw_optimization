@@ -1673,7 +1673,7 @@ export OPENCLAW_ROUTER_TIERS='{
 
 export EVALSCOPE_ROUTER_MODEL_ROUTES='{
   "qwen-flash": {
-    "model_id": "qwen3.6-flash",
+    "model_id": "qwen3.6-plus",
     "eval_type": "openai_api",
     "api_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     "api_key_env": "EVALSCOPE_API_KEY",
@@ -1883,12 +1883,20 @@ tmux set-option -t openclaw-router-evals remain-on-exit on
 tmux attach -t openclaw-router-evals
 ```
 
-脚本默认使用 `qwen3.6-flash`、`qwen3.7-plus`、`qwen3.7-max` 三个 tier。可在启动前覆盖：
+脚本默认使用 `qwen3.6-plus`、`qwen3.7-plus`、`qwen3.7-max` 三个 tier。启动容器前，
+脚本会查询上游 OpenAI-compatible `/models` 接口；若接口返回标准模型目录且配置中的模型不存在，
+脚本会立即失败并列出可用模型，避免进入样本推理后的重试。可在启动前覆盖：
 
 ```bash
 export OPENCLAW_ROUTER_SMALL_MODEL=<small-model-id>
 export OPENCLAW_ROUTER_MID_MODEL=<mid-model-id>
 export OPENCLAW_ROUTER_LARGE_MODEL=<large-model-id>
+```
+
+若目标服务没有实现 `/models`，预检会给出警告并继续。也可以显式关闭：
+
+```bash
+export OPENCLAW_ROUTER_VALIDATE_MODELS=false
 ```
 
 默认执行结束后会关闭本次 Gateway 和 Router API。需要保留容器排查时设置：

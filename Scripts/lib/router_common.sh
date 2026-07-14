@@ -3,6 +3,86 @@
 # Shared runtime for the five Router benchmark entrypoints.
 # Dataset-specific scripts set ROUTER_DATASET_* and EVALSCOPE_* before sourcing.
 
+validate_router_models() {
+  case "${OPENCLAW_ROUTER_VALIDATE_MODELS:-true}" in
+    false|FALSE|0|no|NO) return 0 ;;
+  esac
+
+  local models_url="${EVALSCOPE_API_URL%/}/models"
+  local catalog_file
+  local http_status
+  catalog_file="$(mktemp -t openclaw-router-models.XXXXXX)"
+
+  if ! http_status="$(curl -sS -L --max-time 30 \
+    -o "$catalog_file" \
+    -w '%{http_code}' \
+    -H "Authorization: Bearer ${EVALSCOPE_API_KEY}" \
+    -H 'Accept: application/json' \
+    "$models_url")"; then
+    rm -f "$catalog_file"
+    echo "Warning: could not query Router model catalog at $models_url; continuing without preflight." >&2
+    return 0
+  fi
+
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    rm -f "$catalog_file"
+    echo "Warning: Router model catalog returned HTTP $http_status at $models_url; continuing without preflight." >&2
+    return 0
+  fi
+
+  if ! EVALSCOPE_ROUTER_MODEL_ROUTES="$EVALSCOPE_ROUTER_MODEL_ROUTES" \
+    EVALSCOPE_API_URL="$EVALSCOPE_API_URL" \
+    ROUTER_MODEL_CATALOG_FILE="$catalog_file" \
+    python - <<'PY'
+import json
+import os
+import sys
+
+catalog_path = os.environ["ROUTER_MODEL_CATALOG_FILE"]
+base_url = os.environ["EVALSCOPE_API_URL"].rstrip("/")
+
+try:
+    with open(catalog_path, encoding="utf-8") as file:
+        payload = json.load(file)
+    available = {
+        str(model["id"])
+        for model in payload.get("data", [])
+        if isinstance(model, dict) and model.get("id")
+    }
+except (OSError, TypeError, ValueError) as exc:
+    print(f"Warning: could not parse Router model catalog: {exc}; continuing without preflight.", file=sys.stderr)
+    raise SystemExit(0)
+
+if not available:
+    print("Warning: Router model catalog did not contain model IDs; continuing without preflight.", file=sys.stderr)
+    raise SystemExit(0)
+
+routes = json.loads(os.environ["EVALSCOPE_ROUTER_MODEL_ROUTES"])
+required = {
+    str(route.get("model_id") or route_name)
+    for route_name, route in routes.items()
+    if isinstance(route, dict)
+    and str(route.get("api_url", base_url)).rstrip("/") == base_url
+    and route.get("api_key_env", "EVALSCOPE_API_KEY") == "EVALSCOPE_API_KEY"
+}
+missing = sorted(required - available)
+if missing:
+    print("Router model preflight failed: upstream endpoint does not advertise the configured model(s).", file=sys.stderr)
+    print(f"Endpoint: {base_url}", file=sys.stderr)
+    print(f"Missing: {', '.join(missing)}", file=sys.stderr)
+    print(f"Available: {', '.join(sorted(available))}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"Router model preflight: OK ({', '.join(sorted(required))})")
+PY
+  then
+    rm -f "$catalog_file"
+    return 1
+  fi
+
+  rm -f "$catalog_file"
+}
+
 run_router_eval() {
   : "${ROUTER_DATASET_SLUG:?ROUTER_DATASET_SLUG is required}"
   : "${ROUTER_GATEWAY_PORT:?ROUTER_GATEWAY_PORT is required}"
@@ -82,7 +162,7 @@ run_router_eval() {
   export EVALSCOPE_JUDGE_API_URL="${EVALSCOPE_JUDGE_API_URL:-$EVALSCOPE_API_URL}"
   export EVALSCOPE_JUDGE_API_KEY="${EVALSCOPE_JUDGE_API_KEY:-$EVALSCOPE_API_KEY}"
 
-  local small_model="${OPENCLAW_ROUTER_SMALL_MODEL:-qwen3.6-flash}"
+  local small_model="${OPENCLAW_ROUTER_SMALL_MODEL:-qwen3.6-plus}"
   local mid_model="${OPENCLAW_ROUTER_MID_MODEL:-qwen3.7-plus}"
   local large_model="${OPENCLAW_ROUTER_LARGE_MODEL:-qwen3.7-max}"
 
@@ -141,6 +221,8 @@ JSON
     return 1
   fi
 
+  validate_router_models
+
   docker image inspect "$OPENCLAW_ROUTER_GATEWAY_IMAGE" >/dev/null
   docker image inspect "$OPENCLAW_ROUTER_API_IMAGE" >/dev/null
 
@@ -172,6 +254,7 @@ JSON
   printf 'Local OpenClaw state: %s\n' "$OPENCLAW_EVAL_STATE_DIR"
   printf 'EvalScope dataset directory: %s\n' "$EVALSCOPE_DATASET_DIR"
   printf 'EvalScope output root: %s\n' "$EVALSCOPE_OUTPUT_ROOT"
+  printf 'Router tiers: small=%s mid=%s large=%s\n' "$small_model" "$mid_model" "$large_model"
 
   "${compose_cmd[@]}" up -d openclaw-gateway
 
