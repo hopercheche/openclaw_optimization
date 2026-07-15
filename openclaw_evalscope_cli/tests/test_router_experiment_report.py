@@ -80,6 +80,8 @@ def test_router_report_contains_per_model_cost_and_runtime_metrics(monkeypatch, 
     assert report["cost_estimate"]["total_cost"] == 0.000136
     assert report["cost_estimate"]["cost_by_model"] == {"small-model": 0.000136}
     assert report["openclaw_runtime_metrics"]["n_tasks_with_metrics"] == 1
+    assert report["openclaw_runtime_metrics"]["context_index"]["n_tasks_with_audit"] == 0
+    assert report["openclaw_runtime_metrics"]["planner"]["n_tasks_with_decision"] == 0
     task = report["results"]["task_results"][0]
     assert task["model_calls"][0]["requested_model"] == "small-model"
     assert task["cost_estimate"]["total_cost"] == 0.000136

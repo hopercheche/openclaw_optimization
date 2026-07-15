@@ -276,6 +276,88 @@ The runner rewrites the per-sample OpenClaw provider to the EvalScope bridge:
 Keep `eval_batch_size=1` for this v1 harness because the bridge token is stored
 in the evaluation-only OpenClaw config before each sample.
 
+## Context Index Mode
+
+The full source analysis, image history, failure timeline, server paths, and
+verification evidence are recorded in
+[`CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md`](../CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md).
+
+Build the Context Index image as a small overlay on the existing baseline:
+
+```bash
+OPENCLAW_CONTEXT_INDEX_IMAGE=openclaw-context-index:2026.6.11-overlay \
+  bash openclaw_evalscope_cli/build_context_index_image.sh
+```
+
+The plugin is loaded from `/opt/openclaw-plugins/context-index`. This external
+path is intentional: adding a source directory under `/app/extensions` after
+the baseline was built does not update OpenClaw's bundled-plugin registry.
+
+Enable it through the same runner:
+
+```bash
+export OPENCLAW_IMAGE=openclaw-context-index:2026.6.11-overlay
+export OPENCLAW_CONTEXT_INDEX_ENABLED=true
+export OPENCLAW_CONTEXT_INDEX_CONFIG='{
+  "mode":"progressive",
+  "recentMessageLimit":8,
+  "retrieval":{"topK":8,"candidateK":80,"halfLifeDays":30},
+  "audit":{"enabled":true}
+}'
+export OPENCLAW_CONTEXT_INDEX_RESET_PER_SAMPLE=true
+export EVALSCOPE_BATCH_SIZE=1
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+The runner selects `plugins.slots.contextEngine=context-index`, restarts and
+verifies the Gateway, and records per-task Context Index audit summaries under
+`runner_metrics.context_index_audit`. The aggregate is written to
+`experiment_report.json` at `openclaw_runtime_metrics.context_index`.
+
+Per-sample database reset is the benchmark-safe default. It prevents one
+dataset item from becoming another item's memory while preserving all turns
+inside one item. Disable it only for a deliberately ordered cross-session
+memory workload.
+
+## Task Compass Planner Mode
+
+The complete build and failure record is in
+[`PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md`](../PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md).
+Build the validated native bundle as a baseline overlay:
+
+```bash
+OPENCLAW_PLANNER_IMAGE=openclaw-planner:2026.6.11-overlay \
+  bash openclaw_evalscope_cli/build_planner_image.sh
+```
+
+Enable it through the same runner:
+
+```bash
+export OPENCLAW_IMAGE=openclaw-planner:2026.6.11-overlay
+export OPENCLAW_PLANNER_ENABLED=true
+export OPENCLAW_PLANNER_CONFIG='{
+  "enabled":true,
+  "pythonBin":"python3",
+  "timeoutMs":1500,
+  "maxPromptChars":12000
+}'
+export OPENCLAW_PLANNER_COLLECT_DECISION=true
+export EVALSCOPE_BATCH_SIZE=1
+
+python -m openclaw_evalscope_cli.run_evalscope
+```
+
+The runner loads `/opt/openclaw-plugins/task-compass`, verifies the offline
+Python router, and records a bounded per-task decision. The plugin separately
+injects the same decision through its `before_prompt_build` hook. Aggregates
+are available at `openclaw_runtime_metrics.planner` in
+`experiment_report.json`.
+
+Task Compass `model_tier` is advisory metadata; it does not change the model
+requested through the EvalScope bridge and must not be used as per-model
+pricing data.
+
 Because the OpenClaw container dials the EvalScope bridge from Docker, the
 example sets `agent_config.bridge.proxy_host` to `0.0.0.0` and rewrites
 loopback bridge URLs to `host.docker.internal` inside the runner.

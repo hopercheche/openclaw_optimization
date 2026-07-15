@@ -21,3 +21,4 @@ openclaw_evalscope_cli/.openclaw-eval/
 *.tar.zst
 *.tar.xz
 ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md
+CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md

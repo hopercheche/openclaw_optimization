@@ -463,18 +463,83 @@ def _summarize_routing(task_results: list[dict[str, Any]]) -> dict[str, Any]:
 def _summarize_runtime_metrics(task_results: list[dict[str, Any]]) -> dict[str, Any]:
     series: dict[str, float] = {}
     tasks_with_metrics = 0
+    context_tasks = 0
+    context_totals = {
+        "audit_event_count": 0,
+        "query_count": 0,
+        "candidate_count": 0,
+        "result_count": 0,
+        "retrieved_count": 0,
+        "injected_count": 0,
+        "injected_tokens": 0,
+    }
+    context_event_counts: dict[str, int] = {}
+    retrieval_scores: list[float] = []
+    planner_tasks = 0
+    planner_counts: dict[str, dict[str, int]] = {
+        "planner_profile": {},
+        "policy_mode": {},
+        "model_tier": {},
+        "primary_executor": {},
+        "next_action": {},
+    }
+    planner_confidences: list[float] = []
     for task in task_results:
         metrics = task.get("runner_metrics") or {}
         delta = metrics.get("openclaw_prometheus_delta")
-        if not isinstance(delta, dict):
+        if isinstance(delta, dict):
+            tasks_with_metrics += 1
+            for name, value in delta.items():
+                if isinstance(value, (int, float)):
+                    series[name] = series.get(name, 0.0) + float(value)
+
+        planner_decision = metrics.get("planner_decision")
+        if isinstance(planner_decision, dict):
+            planner_tasks += 1
+            for field, counts in planner_counts.items():
+                value = planner_decision.get(field)
+                if value is not None:
+                    key = str(value)
+                    counts[key] = counts.get(key, 0) + 1
+            confidence = planner_decision.get("confidence")
+            if isinstance(confidence, dict):
+                confidence = confidence.get("overall")
+            if isinstance(confidence, (int, float)):
+                planner_confidences.append(float(confidence))
+
+        context_audit = metrics.get("context_index_audit")
+        if not isinstance(context_audit, dict):
             continue
-        tasks_with_metrics += 1
-        for name, value in delta.items():
-            if isinstance(value, (int, float)):
-                series[name] = series.get(name, 0.0) + float(value)
+        context_tasks += 1
+        for name in context_totals:
+            context_totals[name] += _as_int(context_audit.get(name), 0)
+        for name, value in (context_audit.get("event_counts") or {}).items():
+            context_event_counts[str(name)] = context_event_counts.get(str(name), 0) + _as_int(value, 0)
+        score = context_audit.get("average_retrieval_score")
+        if isinstance(score, (int, float)):
+            retrieval_scores.append(float(score))
     return {
         "n_tasks_with_metrics": tasks_with_metrics,
         "prometheus_counter_delta": dict(sorted(series.items())),
+        "context_index": {
+            "n_tasks_with_audit": context_tasks,
+            **context_totals,
+            "event_counts": dict(sorted(context_event_counts.items())),
+            "mean_task_retrieval_score": (
+                sum(retrieval_scores) / len(retrieval_scores) if retrieval_scores else None
+            ),
+        },
+        "planner": {
+            "n_tasks_with_decision": planner_tasks,
+            "decisions_by_profile": dict(sorted(planner_counts["planner_profile"].items())),
+            "decisions_by_policy_mode": dict(sorted(planner_counts["policy_mode"].items())),
+            "decisions_by_model_tier": dict(sorted(planner_counts["model_tier"].items())),
+            "decisions_by_primary_executor": dict(sorted(planner_counts["primary_executor"].items())),
+            "decisions_by_next_action": dict(sorted(planner_counts["next_action"].items())),
+            "mean_confidence": (
+                sum(planner_confidences) / len(planner_confidences) if planner_confidences else None
+            ),
+        },
     }
 
 
@@ -513,6 +578,13 @@ def _runtime_metadata() -> dict[str, Any]:
         "OPENCLAW_ROUTER_API_IMAGE",
         "OPENCLAW_ROUTER_EMBEDDING_MODE",
         "OPENCLAW_ROUTER_CONFIDENCE_THRESHOLD",
+        "OPENCLAW_CONTEXT_INDEX_ENABLED",
+        "OPENCLAW_CONTEXT_INDEX_IMAGE",
+        "OPENCLAW_CONTEXT_INDEX_PLUGIN_PATH",
+        "OPENCLAW_CONTEXT_INDEX_RESET_PER_SAMPLE",
+        "OPENCLAW_PLANNER_ENABLED",
+        "OPENCLAW_PLANNER_IMAGE",
+        "OPENCLAW_PLANNER_PLUGIN_PATH",
         "OPENCLAW_COMPOSE_PROJECT",
         "OPENCLAW_GATEWAY_PORT",
         "OPENCLAW_AGENT_ID",

@@ -1,8 +1,17 @@
 # OpenClaw CLI Harness EvalScope 开发记录
 
-更新时间：2026-07-10
+更新时间：2026-07-15
 
 本文记录本项目中 OpenClaw 作为 EvalScope 外部 Agent CLI harness 的接入过程、镜像构建方式、服务启动方式、EvalScope 评测方式、验证结果和踩坑修复。
+
+专项开发记录：
+
+- [`ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md`](ROUTER_EVALSCOPE_DEVELOPMENT_RECORD.md)：Router
+  双服务镜像、多模型 bridge、路由与费用指标的完整开发记录。
+- [`CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md`](CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md)：
+  Context Index 源码分析、增量镜像、样本隔离、audit 指标、全部故障和验证路径。
+- [`PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md`](PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md)：Task Compass
+  Planner bundle、overlay、hook 注入、route decision、全部故障和验证路径。
 
 ## 0. Python 环境与依赖
 
@@ -1931,3 +1940,484 @@ OPENCLAW_ROUTER_KEEP_CONTAINERS=true bash Scripts/router_acebench.sh
 若服务器需要改用另一个本地数据盘，只设置 Router 专用变量
 `OPENCLAW_ROUTER_DATASET_DIR`、`OPENCLAW_ROUTER_MODELSCOPE_CACHE` 和
 `OPENCLAW_ROUTER_HF_HOME`，不要复用 baseline 的 state/output 覆盖变量。
+
+## 17. Context Index 架构优化镜像与 EvalScope 评测
+
+本轮 Context Index 接入的完整文件清单、故障时间线、修复方法和验证证据见
+[`CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md`](CONTEXT_INDEX_EVALSCOPE_DEVELOPMENT_RECORD.md)。
+
+`openclaw-architechture/context_index` 是一个 OpenClaw `context-engine` 插件，不是独立 HTTP
+服务。它在 Gateway 进程内使用 SQLite 建立结构化上下文索引，通过
+`plugins.slots.contextEngine=context-index` 接管 context assembly，并把检索决策写入 audit 表。
+因此运行结构只有：
+
+```text
+EvalScope -> openclaw-cli-harness -> OpenClaw CLI/Gateway
+          -> Context Index extension -> EvalScope model bridge
+```
+
+它与 Router 的主要差异是：Context Index 只需要一个 Gateway overlay 镜像，不需要 Router API
+sidecar 或第二份 Compose 文件。
+
+### 17.1 推荐的增量镜像构建
+
+推荐从已验证的 baseline 叠加插件，不重新执行 OpenClaw 的 `pnpm install`、UI build 和完整 TypeScript
+build：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+export OPENCLAW_CONTEXT_INDEX_BASE_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_CONTEXT_INDEX_IMAGE=openclaw-context-index:2026.6.11-overlay
+bash openclaw_evalscope_cli/build_context_index_image.sh
+```
+
+构建上下文只有 `context_index` 目录。Dockerfile 将插件放在：
+
+```text
+/opt/openclaw-plugins/context-index
+```
+
+并复用 baseline 已有的 `commander@15`。该构建不访问 npm/pnpm registry，通常只需几秒。检查：
+
+```bash
+docker image inspect \
+  openclaw-baseline:2026.6.11-srcsnap \
+  openclaw-context-index:2026.6.11-overlay \
+  --format '{{.RepoTags}} {{.Id}} {{.Size}}'
+
+docker run --rm openclaw-context-index:2026.6.11-overlay openclaw --version
+```
+
+虽然源码集成时可以把目录复制到 `openclaw-main/extensions/context-index`，但不能在已经构建完成的
+runtime 镜像中简单复制到 `/app/extensions`。OpenClaw 2026.6.11 的 bundled plugin registry 在完整
+构建时生成，运行时后放入该目录的插件会被判定为 stale/legacy bundled path 并提示
+`plugin not found`。`/opt/openclaw-plugins` 配合 `plugins.load.paths` 是无需全量重建的兼容方案。
+
+如果后续插件改动同时要求修改 OpenClaw core，再使用全量源码构建：
+
+```bash
+rsync -a --delete \
+  openclaw-architechture/context_index/ \
+  openclaw-main/extensions/context-index/
+
+cd openclaw-main
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  pnpm install --no-frozen-lockfile
+
+docker build \
+  --build-arg OPENCLAW_EXTENSIONS=context-index \
+  -t openclaw-context-index:2026.6.11-full \
+  -f Dockerfile .
+```
+
+新增 workspace 会改变 `pnpm-lock.yaml`，因此全量方案要审查并提交 lockfile；普通插件迭代优先使用
+overlay。
+
+### 17.2 发送镜像到服务器
+
+服务器已有 baseline 时，最省事的是同步代码后在服务器执行上一节的增量构建。若服务器不方便构建，
+可以直接传镜像：
+
+```bash
+docker save openclaw-context-index:2026.6.11-overlay \
+  | gzip > openclaw-context-index-2026.6.11-overlay.tar.gz
+
+scp openclaw-context-index-2026.6.11-overlay.tar.gz \
+  featurize@<server>:/home/featurize/work/
+```
+
+服务器加载：
+
+```bash
+gzip -dc /home/featurize/work/openclaw-context-index-2026.6.11-overlay.tar.gz \
+  | docker load
+```
+
+注意 `openclaw-architechture/` 当前是独立嵌套 Git checkout，外层仓库不会自动携带其工作树。服务器若
+选择重新构建而不是加载镜像，必须先确认：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+test -f openclaw-architechture/context_index/openclaw.plugin.json
+test -f openclaw-architechture/context_index/index.ts
+git -C openclaw-architechture rev-parse HEAD
+```
+
+本次验证的组员源码版本为：
+
+```text
+branch: Architecture_final
+commit: f6289a0ecebe3e642919840afe7925ce4f6cc7f8
+```
+
+缺少该目录时，应单独同步组员 branch、使用明确的 vendor snapshot，或者直接加载已经构建好的 overlay；
+不要提交一个没有 `.gitmodules` 的裸 gitlink。
+
+### 17.3 五个完整评测脚本
+
+| 脚本 | 数据集 | 默认 limit | Gateway 端口 |
+|---|---|---:|---:|
+| `Scripts/context_index_mmlu_pro.sh` | MMLU-Pro `computer science` | 5 | 19011 |
+| `Scripts/context_index_gpqa_diamond.sh` | GPQA Diamond | 5 | 19012 |
+| `Scripts/context_index_longmemeval.sh` | LongMemEval `s` | 1 | 19013 |
+| `Scripts/context_index_acebench.sh` | ACEBench `agent` | 50 | 19014 |
+| `Scripts/context_index_locomo.sh` | LoCoMo `qa` | 1 | 19015 |
+
+每个脚本都完成 Conda 激活、镜像检查、独立 Compose project、Gateway 启动、health check、
+`python run.py`、失败日志输出和容器清理。五个数据集分别运行：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+bash Scripts/context_index_mmlu_pro.sh
+bash Scripts/context_index_gpqa_diamond.sh
+bash Scripts/context_index_longmemeval.sh
+bash Scripts/context_index_acebench.sh
+bash Scripts/context_index_locomo.sh
+```
+
+先做一条不调用真实模型的完整 smoke：
+
+```bash
+bash Scripts/context_index_smoke.sh
+```
+
+该脚本使用 EvalScope MockLLM，只验证 runner、CLI、Gateway、context-engine、SQLite audit 和报告链路，
+其 benchmark 分数没有实验意义。
+
+脚本使用以下隔离路径：
+
+```text
+OpenClaw SQLite/state: /tmp/openclaw-eval/<user>/context-index/<dataset>/<run-id>/
+EvalScope dataset:     /home/featurize/data
+ModelScope cache:      /home/featurize/data/modelscope-cache
+Hugging Face cache:    /home/featurize/data/huggingface-cache
+Output:                outputs/context-index/<model-id>__<dataset>/<timestamp>/
+```
+
+并行运行五个数据集：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+tmux new-session -d -s context-index-evals -n mmlu-pro \
+  "cd '$PWD' && bash Scripts/context_index_mmlu_pro.sh"
+tmux new-window -t context-index-evals -n gpqa \
+  "cd '$PWD' && bash Scripts/context_index_gpqa_diamond.sh"
+tmux new-window -t context-index-evals -n longmemeval \
+  "cd '$PWD' && bash Scripts/context_index_longmemeval.sh"
+tmux new-window -t context-index-evals -n acebench \
+  "cd '$PWD' && bash Scripts/context_index_acebench.sh"
+tmux new-window -t context-index-evals -n locomo \
+  "cd '$PWD' && bash Scripts/context_index_locomo.sh"
+tmux set-option -t context-index-evals remain-on-exit on
+tmux attach -t context-index-evals
+```
+
+每个窗口使用不同端口和本地 SQLite state，不会再出现多个任务争用同一个
+`openclaw.sqlite` 的 `database is locked`。同一数据集的重复启动还会被 `flock` 拦截。
+
+### 17.4 Context Index 参数
+
+默认使用 `progressive` 模式。常用参数都可以在脚本启动前覆盖：
+
+```bash
+export OPENCLAW_CONTEXT_INDEX_MODE=progressive
+export OPENCLAW_CONTEXT_INDEX_RECENT_MESSAGE_LIMIT=8
+export OPENCLAW_CONTEXT_INDEX_MAX_SNIPPET_CHARS=900
+export OPENCLAW_CONTEXT_INDEX_TOP_K=8
+export OPENCLAW_CONTEXT_INDEX_CANDIDATE_K=80
+export OPENCLAW_CONTEXT_INDEX_HALF_LIFE_DAYS=30
+export OPENCLAW_CONTEXT_INDEX_AUDIT_ENABLED=true
+export OPENCLAW_CONTEXT_INDEX_RESET_PER_SAMPLE=true
+
+EVALSCOPE_LIMIT=5 bash Scripts/context_index_locomo.sh
+```
+
+也可以用完整 JSON 一次覆盖插件配置：
+
+```bash
+export OPENCLAW_CONTEXT_INDEX_CONFIG='{
+  "mode": "progressive",
+  "defaultProjectId": "locomo-experiment",
+  "recentMessageLimit": 6,
+  "maxSnippetChars": 700,
+  "retrieval": {"topK": 6, "candidateK": 60, "halfLifeDays": 21},
+  "audit": {"enabled": true}
+}'
+```
+
+正式 benchmark 默认每个样本前删除该 agent 的 `context-index.sqlite`，防止前一个测试样本的信息泄漏到
+后一个样本。只有专门测试跨会话持久记忆时才设置：
+
+```bash
+export OPENCLAW_CONTEXT_INDEX_RESET_PER_SAMPLE=false
+```
+
+此时必须自行设计固定顺序的多会话 workload，不能把普通数据集分数与 reset 模式直接比较。
+
+### 17.5 报告与预期结果
+
+最终 `experiment_report.json` 的每条任务包含：
+
+```text
+results.task_results[].runner_metrics.context_index_config
+results.task_results[].runner_metrics.context_index_reset
+results.task_results[].runner_metrics.context_index_audit
+```
+
+数据集级汇总位于：
+
+```text
+openclaw_runtime_metrics.context_index
+```
+
+其中包括 query/candidate/result/retrieved/injected 数量、注入 token、audit event 分布和平均检索分数。
+模型 token、延迟、分数和费用继续使用统一的 EvalScope report 字段。baseline 与 Context Index 应固定同一
+模型、temperature、seed、limit、Judge 和价格，然后比较：
+
+- 任务分数是否提升或至少不回退。
+- `Total Tok`、平均任务 token 和估算费用是否下降。
+- 端到端 latency 是否因 SQLite 检索明显增加。
+- `context_index_audit.injected_count` 是否非零，确认优化确实参与了模型调用。
+
+MMLU-Pro 和 GPQA 主要用于知识/推理回归，通常是单轮任务，不应期待 Context Index 带来明显收益。
+ACEBench 在 agent/tool 后续 turn 中可能触发检索。当前 EvalScope 的 LongMemEval、LoCoMo long-context
+adapter 会把历史压成一次 `--message-file` 指令；首轮调用之前没有旧索引，因而可能出现
+`candidate_count=0`、`injected_count=0`。这种结果表示评测没有真正触发记忆检索，不表示插件算法无效。
+要严格评估跨轮记忆，需要把同一 conversation 的 turn 依次发送到同一个 OpenClaw session，或先通过
+`openclaw context-index import` 导入上下文，再提出检索问题。
+
+保留失败容器排查：
+
+```bash
+OPENCLAW_CONTEXT_INDEX_KEEP_CONTAINERS=true \
+  bash Scripts/context_index_acebench.sh
+```
+
+### 17.6 本次验证状态
+
+最终验证镜像：
+
+```text
+openclaw-context-index:2026.6.11-overlay
+sha256:ed83f98d128376a76cd6f20742c7d966379634fe844e6395c100849632e7739f
+size: 797578017 bytes
+delta from baseline: 53328 bytes
+```
+
+验证结果：
+
+```text
+Python compileall: passed
+Shell bash -n: passed
+pytest: 8 passed
+Docker overlay build: passed
+Gateway /healthz: passed
+plugins inspect context-index: Status: loaded
+baseline default plugins preserved: 8 + context-index = 9
+context-index audit CLI: passed
+EvalScope -> CLI -> Gateway -> Context Index -> MockLLM bridge: passed
+experiment_report.json task and aggregate audit fields: passed
+```
+
+本次没有为了测试插件重新安装 OpenClaw 的 Node 开发依赖，因此没有在外层集成仓库重复运行组员的
+`pnpm test`/`pnpm benchmark`；这些测试仍由 `Architecture_final` 插件分支负责。集成侧已经通过真实
+OpenClaw runtime 和 EvalScope MockLLM E2E 验证。
+
+## 18. Task Compass Planner 镜像与 EvalScope 评测
+
+完整源码分析、发布 bundle、故障时间线、服务器路径和验证证据见
+[`PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md`](PLANNER_EVALSCOPE_DEVELOPMENT_RECORD.md)。
+
+实际模板路径是：
+
+```text
+openclaw-planner/integrations/openclaw-native
+```
+
+该目录只是发布模板，不包含 `router-bridge.mjs` 运行时需要的 `skills/task-compass/scripts/route_task.py`
+和模型资产。因此不能只复制这 5 个模板文件。构建脚本会先调用组员的 `build_integrations.py` 生成并
+验证完整 29 文件 native bundle，再叠加到 baseline。
+
+### 18.1 增量构建
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+export OPENCLAW_PLANNER_BASE_IMAGE=openclaw-baseline:2026.6.11-srcsnap
+export OPENCLAW_PLANNER_IMAGE=openclaw-planner:2026.6.11-overlay
+export OPENCLAW_PLANNER_SOURCE_DIR="$PWD/openclaw-planner"
+export OPENCLAW_PLANNER_VERSION=0.3.0
+
+bash openclaw_evalscope_cli/build_planner_image.sh
+```
+
+最终插件路径：
+
+```text
+/opt/openclaw-plugins/task-compass
+```
+
+构建不执行 npm、pnpm、pip 或 OpenClaw 全量编译，也不需要网络。服务器重新构建前必须确认：
+
+```bash
+test -f openclaw-planner/integrations/openclaw-native/openclaw.plugin.json
+test -f openclaw-planner/scripts/build_integrations.py
+git -C openclaw-planner rev-parse HEAD
+```
+
+本次源码版本：
+
+```text
+branch: main
+commit: 7f619a99285bb4786844553e3965db224e23cc74
+```
+
+`openclaw-planner/` 是独立嵌套 Git 仓库，外层 clone 不会自动恢复。服务器缺少源码时，单独 clone 组员
+仓库，或直接传镜像：
+
+```bash
+docker save openclaw-planner:2026.6.11-overlay \
+  | gzip > openclaw-planner-2026.6.11-overlay.tar.gz
+
+gzip -dc openclaw-planner-2026.6.11-overlay.tar.gz | docker load
+```
+
+### 18.2 运行结构与边界
+
+Task Compass 注册 `before_prompt_build` hook，在模型调用前执行离线 Python router，并追加：
+
+```text
+<task-compass advisory="true">
+{bounded route decision}
+Preserve refuse, await_human, replan, confirmation, read-only, and safety constraints...
+</task-compass>
+```
+
+它不注册工具、不访问网络、不持有 API key、不替代 OpenClaw 权限系统。`model_tier` 只是 advisory，
+不会像 Router 一样切换真实模型；Planner 五数据集始终使用同一个 `EVALSCOPE_MODEL`。
+
+### 18.3 五个正式脚本
+
+| 脚本 | 数据集 | 默认 limit | Gateway 端口 |
+|---|---|---:|---:|
+| `Scripts/planner_mmlu_pro.sh` | MMLU-Pro `computer science` | 5 | 19111 |
+| `Scripts/planner_gpqa_diamond.sh` | GPQA Diamond | 5 | 19112 |
+| `Scripts/planner_longmemeval.sh` | LongMemEval `s` | 1 | 19113 |
+| `Scripts/planner_acebench.sh` | ACEBench `agent` | 50 | 19114 |
+| `Scripts/planner_locomo.sh` | LoCoMo `qa` | 1 | 19115 |
+
+无真实模型费用的 smoke：
+
+```bash
+bash Scripts/planner_smoke.sh
+```
+
+正式运行：
+
+```bash
+bash Scripts/planner_mmlu_pro.sh
+bash Scripts/planner_gpqa_diamond.sh
+bash Scripts/planner_longmemeval.sh
+bash Scripts/planner_acebench.sh
+bash Scripts/planner_locomo.sh
+```
+
+并行运行：
+
+```bash
+cd /home/featurize/work/ProjectAgentScope/openclaw_optimization
+
+tmux new-session -d -s planner-evals -n mmlu-pro \
+  "cd '$PWD' && bash Scripts/planner_mmlu_pro.sh"
+tmux new-window -t planner-evals -n gpqa \
+  "cd '$PWD' && bash Scripts/planner_gpqa_diamond.sh"
+tmux new-window -t planner-evals -n longmemeval \
+  "cd '$PWD' && bash Scripts/planner_longmemeval.sh"
+tmux new-window -t planner-evals -n acebench \
+  "cd '$PWD' && bash Scripts/planner_acebench.sh"
+tmux new-window -t planner-evals -n locomo \
+  "cd '$PWD' && bash Scripts/planner_locomo.sh"
+tmux set-option -t planner-evals remain-on-exit on
+tmux attach -t planner-evals
+```
+
+脚本使用：
+
+```text
+state:      /tmp/openclaw-eval/<user>/planner/<dataset>/<run-id>/
+dataset:    /home/featurize/data
+ModelScope: /home/featurize/data/modelscope-cache
+HF cache:   /home/featurize/data/huggingface-cache
+output:     outputs/planner/<model-id>__<dataset>/<timestamp>/
+```
+
+### 18.4 Planner 参数
+
+```bash
+export OPENCLAW_PLANNER_PLUGIN_ENABLED=true
+export OPENCLAW_PLANNER_PYTHON_BIN=python3
+export OPENCLAW_PLANNER_TIMEOUT_MS=1500
+export OPENCLAW_PLANNER_MAX_PROMPT_CHARS=12000
+export OPENCLAW_PLANNER_COLLECT_DECISION=true
+```
+
+也可以完整覆盖：
+
+```bash
+export OPENCLAW_PLANNER_CONFIG='{
+  "enabled": true,
+  "pythonBin": "python3",
+  "timeoutMs": 1500,
+  "maxPromptChars": 12000
+}'
+```
+
+正式评测建议保留 `OPENCLAW_PLANNER_COLLECT_DECISION=true`。Runner 会严格执行同一离线 router；若插件
+资产缺失、超时或 schema 错误，任务直接失败，避免插件静默回退 baseline 后仍产生貌似正常的分数。
+
+### 18.5 报告与解释
+
+任务级：
+
+```text
+results.task_results[].runner_metrics.planner_config
+results.task_results[].runner_metrics.planner_decision
+results.task_results[].runner_metrics.planner_probe_wall_time
+```
+
+数据集级：
+
+```text
+openclaw_runtime_metrics.planner
+```
+
+包含 profile、policy mode、advisory model tier、primary executor、next action 和平均
+`confidence.overall`。模型 token/费用继续按真实单模型 bridge trace 计算，不能按 advisory tier 计费。
+
+MMLU-Pro/GPQA 主要做知识推理回归，ACEBench 更适合观察 agent/tool 规划行为；LongMemEval/LoCoMo 可
+观察长输入下 route 稳定性。Task Compass 自带 240-case integration benchmark 更适合评价 route contract
+本身，五个 EvalScope 数据集评价接入完整 OpenClaw 后的端到端质量、token、费用和行为变化。
+
+### 18.6 本次验证状态
+
+```text
+image: openclaw-planner:2026.6.11-overlay
+id: sha256:f31a65fa4f759eb26e2db5895cd4fd8a29748c294632d9532046e292fc838da6
+size: 800816899 bytes
+delta from baseline: 3292210 bytes
+native bundle files: 29
+native archive sha256: d5f31d0c254f34770918649c10907d3a9a40f32ed7675e75abb7411b8c057a05
+bundle validation: passed
+Planner source tests: 37 passed
+outer EvalScope tests: 11 passed
+plugins inspect task-compass: Status loaded
+canonical and legacy skills: eligible
+baseline plugins preserved: 8 + task-compass = 9
+MockLLM E2E: passed
+hook advisory present: true
+runner probe equals hook decision: true
+experiment_report Planner aggregate: passed
+```

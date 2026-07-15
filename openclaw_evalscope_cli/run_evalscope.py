@@ -229,6 +229,10 @@ def build_task_config() -> dict[str, Any]:
         _env_json_object("EVALSCOPE_GENERATION_CONFIG") or {},
     )
     router_enabled = _env_bool("OPENCLAW_ROUTER_ENABLED", False)
+    context_index_enabled = _env_bool("OPENCLAW_CONTEXT_INDEX_ENABLED", False)
+    context_index_config = _env_json_object("OPENCLAW_CONTEXT_INDEX_CONFIG") or {}
+    planner_enabled = _env_bool("OPENCLAW_PLANNER_ENABLED", False)
+    planner_config = _env_json_object("OPENCLAW_PLANNER_CONFIG") or {}
     bridge_routes: dict[str, Any] = {}
     router_tiers: dict[str, str] = {}
     router_models: list[dict[str, Any]] = []
@@ -243,6 +247,26 @@ def build_task_config() -> dict[str, Any]:
         os.environ.setdefault("OPENCLAW_EVAL_SECRET_DIR", str(state_root / "router-secrets"))
         Path(os.environ["OPENCLAW_EVAL_STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         Path(os.environ["OPENCLAW_EVAL_SECRET_DIR"]).mkdir(parents=True, exist_ok=True)
+    elif context_index_enabled:
+        state_root = Path.cwd() / "openclaw_evalscope_cli" / ".openclaw-eval"
+        os.environ.setdefault("OPENCLAW_EVAL_STATE_DIR", str(state_root / "context-index-state"))
+        os.environ.setdefault("OPENCLAW_EVAL_SECRET_DIR", str(state_root / "context-index-secrets"))
+        Path(os.environ["OPENCLAW_EVAL_STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["OPENCLAW_EVAL_SECRET_DIR"]).mkdir(parents=True, exist_ok=True)
+    elif planner_enabled:
+        state_root = Path.cwd() / "openclaw_evalscope_cli" / ".openclaw-eval"
+        os.environ.setdefault("OPENCLAW_EVAL_STATE_DIR", str(state_root / "planner-state"))
+        os.environ.setdefault("OPENCLAW_EVAL_SECRET_DIR", str(state_root / "planner-secrets"))
+        Path(os.environ["OPENCLAW_EVAL_STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        Path(os.environ["OPENCLAW_EVAL_SECRET_DIR"]).mkdir(parents=True, exist_ok=True)
+
+    default_compose_project = "openclaw-eval-baseline"
+    if router_enabled:
+        default_compose_project = "openclaw-eval-router"
+    elif context_index_enabled:
+        default_compose_project = "openclaw-eval-context-index"
+    elif planner_enabled:
+        default_compose_project = "openclaw-eval-planner"
     agent_config = _deep_merge(
         {
             "mode": "external",
@@ -257,7 +281,7 @@ def build_task_config() -> dict[str, Any]:
             "kwargs": {
                 "compose_project": os.getenv(
                     "OPENCLAW_COMPOSE_PROJECT",
-                    "openclaw-eval-router" if router_enabled else "openclaw-eval-baseline",
+                    default_compose_project,
                 ),
                 "compose_files": _default_compose_files(),
                 "compose_dir": os.getenv("OPENCLAW_COMPOSE_DIR") or None,
@@ -277,6 +301,26 @@ def build_task_config() -> dict[str, Any]:
                 "router_request_timeout_ms": _env_int("OPENCLAW_ROUTER_REQUEST_TIMEOUT_MS", 5000),
                 "router_strict": _env_bool("OPENCLAW_ROUTER_STRICT", True),
                 "router_collect_metrics": _env_bool("OPENCLAW_ROUTER_COLLECT_METRICS", True),
+                "context_index_enabled": context_index_enabled,
+                "context_index_plugin_id": os.getenv("OPENCLAW_CONTEXT_INDEX_PLUGIN_ID", "context-index"),
+                "context_index_plugin_path": os.getenv(
+                    "OPENCLAW_CONTEXT_INDEX_PLUGIN_PATH", "/opt/openclaw-plugins/context-index"
+                ),
+                "context_index_config": context_index_config,
+                "context_index_collect_audit": _env_bool("OPENCLAW_CONTEXT_INDEX_COLLECT_AUDIT", True),
+                "context_index_audit_limit": _env_int("OPENCLAW_CONTEXT_INDEX_AUDIT_LIMIT", 2000),
+                "context_index_reset_per_sample": _env_bool(
+                    "OPENCLAW_CONTEXT_INDEX_RESET_PER_SAMPLE", True
+                ),
+                "context_index_database_path": os.getenv("OPENCLAW_CONTEXT_INDEX_DATABASE_PATH") or None,
+                "planner_enabled": planner_enabled,
+                "planner_plugin_id": os.getenv("OPENCLAW_PLANNER_PLUGIN_ID", "task-compass"),
+                "planner_plugin_path": os.getenv(
+                    "OPENCLAW_PLANNER_PLUGIN_PATH", "/opt/openclaw-plugins/task-compass"
+                ),
+                "planner_config": planner_config,
+                "planner_collect_decision": _env_bool("OPENCLAW_PLANNER_COLLECT_DECISION", True),
+                "planner_route_script": os.getenv("OPENCLAW_PLANNER_ROUTE_SCRIPT") or None,
                 "bridge_host_for_container": os.getenv(
                     "OPENCLAW_BRIDGE_HOST_FOR_CONTAINER", "host.docker.internal"
                 ),
@@ -295,7 +339,15 @@ def build_task_config() -> dict[str, Any]:
         "model": model_name,
         "model_id": os.getenv(
             "EVALSCOPE_MODEL_ID",
-            "openclaw_router_harness" if router_enabled else "openclaw_cli_harness",
+            (
+                "openclaw_router_harness"
+                if router_enabled
+                else "openclaw_context_index_harness"
+                if context_index_enabled
+                else "openclaw_planner_harness"
+                if planner_enabled
+                else "openclaw_cli_harness"
+            ),
         ),
         "eval_type": eval_type,
         "datasets": datasets,
@@ -317,6 +369,10 @@ def build_task_config() -> dict[str, Any]:
     }
     if router_enabled and cfg["eval_batch_size"] != 1:
         raise ValueError("OpenClaw router v1 requires EVALSCOPE_BATCH_SIZE=1")
+    if context_index_enabled and cfg["eval_batch_size"] != 1:
+        raise ValueError("OpenClaw Context Index v1 requires EVALSCOPE_BATCH_SIZE=1")
+    if planner_enabled and cfg["eval_batch_size"] != 1:
+        raise ValueError("OpenClaw Planner v1 requires EVALSCOPE_BATCH_SIZE=1")
 
     dataset_dir = os.getenv("EVALSCOPE_DATASET_DIR")
     dataset_hub = os.getenv("EVALSCOPE_DATASET_HUB")

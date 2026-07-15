@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import json
 import re
 import shlex
@@ -103,6 +104,48 @@ def _prometheus_delta(before: Dict[str, float], after: Dict[str, float]) -> Dict
     return result
 
 
+def _summarize_context_index_audit(
+    before: List[Dict[str, Any]],
+    after: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Summarize audit events created by one harness task."""
+    before_ids = {str(event.get("id")) for event in before if event.get("id")}
+    events = [event for event in after if str(event.get("id")) not in before_ids]
+    event_counts = Counter(str(event.get("eventType") or "unknown") for event in events)
+    injected = [event for event in events if event.get("eventType") == "context_injected"]
+    retrieved = [event for event in events if event.get("eventType") == "context_retrieved"]
+    queries = [event for event in events if event.get("eventType") == "context_query_created"]
+    scores = [float(event["score"]) for event in retrieved if event.get("score") is not None]
+
+    return {
+        "audit_event_count": len(events),
+        "event_counts": dict(sorted(event_counts.items())),
+        "query_count": len(queries),
+        "candidate_count": sum(int((event.get("metadata") or {}).get("candidateCount") or 0) for event in queries),
+        "result_count": sum(int((event.get("metadata") or {}).get("resultCount") or 0) for event in queries),
+        "retrieved_count": len(retrieved),
+        "injected_count": len(injected),
+        "injected_tokens": sum(int(event.get("tokenCount") or 0) for event in injected),
+        "average_retrieval_score": (sum(scores) / len(scores)) if scores else None,
+    }
+
+
+PLANNER_DECISION_FIELDS = (
+    "schema_version",
+    "planner_profile",
+    "planned_tools",
+    "primary_executor",
+    "policy_mode",
+    "permission_behavior",
+    "context_policy",
+    "model_tier",
+    "next_action",
+    "safety_guard",
+    "confidence",
+    "reason",
+)
+
+
 DEFAULT_WORKSPACE_PRESERVE_ENTRIES = [
     ".git",
     ".agents",
@@ -181,6 +224,20 @@ class OpenClawCliHarnessRunner(AgentRunner):
         router_collect_metrics: bool = True,
         router_plugin_path: str = "/opt/openclaw-plugins/openclaw-router",
         prometheus_plugin_path: str = "/opt/openclaw-plugins/diagnostics-prometheus",
+        context_index_enabled: bool = False,
+        context_index_plugin_id: str = "context-index",
+        context_index_plugin_path: str = "/opt/openclaw-plugins/context-index",
+        context_index_config: Dict[str, Any] | str | None = None,
+        context_index_collect_audit: bool = True,
+        context_index_audit_limit: int = 2000,
+        context_index_reset_per_sample: bool = True,
+        context_index_database_path: str | None = None,
+        planner_enabled: bool = False,
+        planner_plugin_id: str = "task-compass",
+        planner_plugin_path: str = "/opt/openclaw-plugins/task-compass",
+        planner_config: Dict[str, Any] | str | None = None,
+        planner_collect_decision: bool = True,
+        planner_route_script: str | None = None,
         bridge_host_for_container: str = "host.docker.internal",
         auto_up: bool = True,
         setup_timeout_s: float = 180.0,
@@ -224,6 +281,24 @@ class OpenClawCliHarnessRunner(AgentRunner):
         self._router_collect_metrics = _as_bool(router_collect_metrics, True)
         self._router_plugin_path = router_plugin_path
         self._prometheus_plugin_path = prometheus_plugin_path
+        self._context_index_enabled = _as_bool(context_index_enabled, False)
+        self._context_index_plugin_id = context_index_plugin_id
+        self._context_index_plugin_path = context_index_plugin_path
+        self._context_index_config = _as_dict(context_index_config)
+        self._context_index_collect_audit = _as_bool(context_index_collect_audit, True)
+        self._context_index_audit_limit = max(1, int(context_index_audit_limit))
+        self._context_index_reset_per_sample = _as_bool(context_index_reset_per_sample, True)
+        self._context_index_database_path = context_index_database_path or (
+            f"/home/node/.openclaw/agents/{self._agent_id}/agent/context-index.sqlite"
+        )
+        self._planner_enabled = _as_bool(planner_enabled, False)
+        self._planner_plugin_id = planner_plugin_id
+        self._planner_plugin_path = planner_plugin_path
+        self._planner_config = _as_dict(planner_config)
+        self._planner_collect_decision = _as_bool(planner_collect_decision, True)
+        self._planner_route_script = planner_route_script or (
+            f"{self._planner_plugin_path}/skills/task-compass/scripts/route_task.py"
+        )
         self._provider_id = self._router_plugin_id if self._router_enabled else provider_id
         self._protocol = protocol
         self._provider_api = provider_api
@@ -280,19 +355,38 @@ class OpenClawCliHarnessRunner(AgentRunner):
         if version.returncode != 0:
             raise RuntimeError(f"OpenClaw CLI version probe failed: {_tail(version.stderr or version.stdout)}")
 
+        restart_gateway = False
         if self._router_enabled:
             plugin_was_loaded = await self._router_plugin_loaded(env)
             await self._configure_router_plugins(env)
-            if not plugin_was_loaded:
-                restart = await env.exec(
-                    self._compose_cmd(["restart", self._gateway_service]),
-                    cwd=self._compose_dir,
-                    timeout=self._setup_timeout_s,
-                )
-                if restart.returncode != 0:
-                    raise RuntimeError(f"OpenClaw gateway restart failed: {_tail(restart.stderr or restart.stdout)}")
-                await self._wait_for_gateway_health(env)
+            restart_gateway = not plugin_was_loaded
+
+        if self._context_index_enabled:
+            await self._configure_context_index_plugin(env)
+            # Context-engine slot and policy changes are startup settings.
+            restart_gateway = True
+
+        if self._planner_enabled:
+            await self._configure_planner_plugin(env)
+            # Plugin load paths and prompt hooks are established at startup.
+            restart_gateway = True
+
+        if restart_gateway:
+            restart = await env.exec(
+                self._compose_cmd(["restart", self._gateway_service]),
+                cwd=self._compose_dir,
+                timeout=self._setup_timeout_s,
+            )
+            if restart.returncode != 0:
+                raise RuntimeError(f"OpenClaw gateway restart failed: {_tail(restart.stderr or restart.stdout)}")
+            await self._wait_for_gateway_health(env)
+
+        if self._router_enabled:
             await self._verify_router_setup(env)
+        if self._context_index_enabled:
+            await self._verify_context_index_setup(env)
+        if self._planner_enabled:
+            await self._verify_planner_setup(env)
 
     async def run(
         self,
@@ -319,8 +413,21 @@ class OpenClawCliHarnessRunner(AgentRunner):
         )
         if self._router_enabled:
             await self._configure_router_sample_id(env, str(sample_label))
+        context_index_reset = None
+        if self._context_index_enabled and self._context_index_reset_per_sample:
+            context_index_reset = await self._reset_context_index_database(env)
+        planner_probe = (
+            await self._probe_planner_decision(env, task.instruction)
+            if self._planner_enabled and self._planner_collect_decision
+            else None
+        )
 
         prometheus_before = await self._scrape_prometheus(env) if self._router_collect_metrics and self._router_enabled else {}
+        context_audit_before = (
+            await self._read_context_index_audit(env)
+            if self._context_index_enabled and self._context_index_collect_audit
+            else []
+        )
 
         agent_cmd = [
             "openclaw",
@@ -379,6 +486,11 @@ class OpenClawCliHarnessRunner(AgentRunner):
             raise RuntimeError(f"{FRAMEWORK_NAME} could not parse OpenClaw JSON: {exc}; stdout_tail={err}") from exc
 
         prometheus_after = await self._scrape_prometheus(env) if self._router_collect_metrics and self._router_enabled else {}
+        context_audit_after = (
+            await self._read_context_index_audit(env)
+            if self._context_index_enabled and self._context_index_collect_audit
+            else []
+        )
         agent_meta = self._extract_agent_meta(envelope)
 
         return AgentRunResult(
@@ -395,6 +507,18 @@ class OpenClawCliHarnessRunner(AgentRunner):
                 "router_tiers": self._router_tiers if self._router_enabled else None,
                 "openclaw_agent_meta": agent_meta,
                 "openclaw_prometheus_delta": _prometheus_delta(prometheus_before, prometheus_after),
+                "context_index_enabled": self._context_index_enabled,
+                "context_index_config": self._context_index_config if self._context_index_enabled else None,
+                "context_index_reset": context_index_reset,
+                "context_index_audit": (
+                    _summarize_context_index_audit(context_audit_before, context_audit_after)
+                    if self._context_index_enabled and self._context_index_collect_audit
+                    else None
+                ),
+                "planner_enabled": self._planner_enabled,
+                "planner_config": self._planner_config if self._planner_enabled else None,
+                "planner_decision": planner_probe.get("decision") if planner_probe else None,
+                "planner_probe_wall_time": planner_probe.get("wall_time") if planner_probe else None,
             },
         )
 
@@ -578,6 +702,160 @@ class OpenClawCliHarnessRunner(AgentRunner):
             merge=True,
         )
         await self._openclaw_config_set(env, "diagnostics.enabled", True)
+
+    async def _configure_context_index_plugin(self, env: AgentEnvironment) -> None:
+        load_paths = [self._context_index_plugin_path]
+        plugin_config: Dict[str, Any] = {
+            "load": {"paths": load_paths},
+            "slots": {"contextEngine": self._context_index_plugin_id},
+            "entries": {
+                self._context_index_plugin_id: {
+                    "enabled": True,
+                    "config": self._context_index_config,
+                }
+            },
+        }
+        if self._router_enabled:
+            load_paths.extend([self._router_plugin_path, self._prometheus_plugin_path])
+            plugin_config["allow"] = [
+                self._context_index_plugin_id,
+                self._router_plugin_id,
+                "diagnostics-prometheus",
+            ]
+
+        await self._openclaw_config_set(
+            env,
+            "plugins",
+            plugin_config,
+            merge=True,
+        )
+
+    async def _configure_planner_plugin(self, env: AgentEnvironment) -> None:
+        load_paths = [self._planner_plugin_path]
+        plugin_config: Dict[str, Any] = {
+            "load": {"paths": load_paths},
+            "entries": {
+                self._planner_plugin_id: {
+                    "enabled": True,
+                    "config": self._planner_config,
+                }
+            },
+        }
+        if self._context_index_enabled:
+            load_paths.append(self._context_index_plugin_path)
+        if self._router_enabled:
+            load_paths.extend([self._router_plugin_path, self._prometheus_plugin_path])
+            allow = [self._planner_plugin_id, self._router_plugin_id, "diagnostics-prometheus"]
+            if self._context_index_enabled:
+                allow.append(self._context_index_plugin_id)
+            plugin_config["allow"] = allow
+
+        await self._openclaw_config_set(env, "plugins", plugin_config, merge=True)
+
+    async def _verify_planner_setup(self, env: AgentEnvironment) -> None:
+        plugin = await self._compose_run_cli(
+            env,
+            ["plugins", "inspect", self._planner_plugin_id],
+            timeout=self._setup_timeout_s,
+        )
+        if plugin.returncode != 0 or "Status: loaded" not in (plugin.stdout or ""):
+            raise RuntimeError(f"Task Compass plugin probe failed: {_tail(plugin.stderr or plugin.stdout)}")
+
+        probe = await self._probe_planner_decision(
+            env,
+            "Read the project status without modifying files.",
+        )
+        if (probe.get("decision") or {}).get("schema_version") != "1.0":
+            raise RuntimeError("Task Compass route probe returned an unsupported schema version")
+
+    async def _probe_planner_decision(self, env: AgentEnvironment, instruction: str) -> Dict[str, Any]:
+        raw_max_chars = self._planner_config.get("maxPromptChars", 12000)
+        max_chars = raw_max_chars if isinstance(raw_max_chars, int) and 256 <= raw_max_chars <= 32000 else 12000
+        raw_timeout_ms = self._planner_config.get("timeoutMs", 1500)
+        timeout_ms = raw_timeout_ms if isinstance(raw_timeout_ms, int) and 100 <= raw_timeout_ms <= 5000 else 1500
+        prompt = instruction[:max_chars]
+        result = await self._compose_run_cli(
+            env,
+            [self._planner_route_script, "--goal", prompt],
+            timeout=max(10.0, timeout_ms / 1000 + 5.0),
+            entrypoint="python3",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Task Compass route probe failed: {_tail(result.stderr or result.stdout)}")
+        try:
+            payload = json.loads((result.stdout or "").strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Task Compass route probe returned invalid JSON: {_tail(result.stdout)}") from exc
+        if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+            raise RuntimeError("Task Compass route probe did not return a schema 1.0 decision")
+        decision = {field: payload[field] for field in PLANNER_DECISION_FIELDS if field in payload}
+        return {"decision": decision, "wall_time": result.duration}
+
+    async def _verify_context_index_setup(self, env: AgentEnvironment) -> None:
+        plugin = await self._compose_run_cli(
+            env,
+            ["plugins", "inspect", self._context_index_plugin_id],
+            timeout=self._setup_timeout_s,
+        )
+        if plugin.returncode != 0 or "Status: loaded" not in (plugin.stdout or ""):
+            raise RuntimeError(f"Context Index plugin probe failed: {_tail(plugin.stderr or plugin.stdout)}")
+
+        configured_slot = await self._compose_run_cli(
+            env,
+            ["config", "get", "plugins.slots.contextEngine"],
+            timeout=self._setup_timeout_s,
+        )
+        if configured_slot.returncode != 0 or self._context_index_plugin_id not in (configured_slot.stdout or ""):
+            raise RuntimeError(
+                f"Context Index slot probe failed: {_tail(configured_slot.stderr or configured_slot.stdout)}"
+            )
+
+        await self._read_context_index_audit(env)
+
+    async def _read_context_index_audit(self, env: AgentEnvironment) -> List[Dict[str, Any]]:
+        result = await self._compose_run_cli(
+            env,
+            ["context-index", "audit", "--json", "--limit", str(self._context_index_audit_limit)],
+            timeout=self._setup_timeout_s,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Context Index audit probe failed: {_tail(result.stderr or result.stdout)}")
+        try:
+            payload = json.loads((result.stdout or "").strip())
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Context Index audit returned invalid JSON: {_tail(result.stdout)}") from exc
+        if not isinstance(payload, list) or not all(isinstance(event, dict) for event in payload):
+            raise RuntimeError("Context Index audit did not return a JSON event list")
+        return payload
+
+    async def _reset_context_index_database(self, env: AgentEnvironment) -> Dict[str, Any]:
+        database = shlex.quote(self._context_index_database_path)
+        script = "\n".join(
+            [
+                "set -eu",
+                f"database={database}",
+                'existed=false; [ ! -e "$database" ] || existed=true',
+                'rm -f -- "$database" "$database-wal" "$database-shm"',
+                'printf \'{"database":"%s","existed":%s,"removed":true}\\n\' "$database" "$existed"',
+            ]
+        )
+        result = await self._compose_run_cli(
+            env,
+            ["-lc", script],
+            timeout=self._setup_timeout_s,
+            entrypoint="sh",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Context Index database reset failed: {_tail(result.stderr or result.stdout)}")
+        try:
+            payload = json.loads((result.stdout or "").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Context Index database reset returned invalid JSON: {_tail(result.stdout)}") from exc
+        logger.info(
+            f"{FRAMEWORK_NAME} context-index reset: database={payload.get('database')} "
+            f"existed={payload.get('existed')}"
+        )
+        return payload
 
     async def _configure_router_sample_id(self, env: AgentEnvironment, sample_id: str) -> None:
         await self._openclaw_config_set(
