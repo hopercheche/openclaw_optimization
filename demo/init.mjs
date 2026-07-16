@@ -49,8 +49,14 @@ function boolean(name, fallback) {
 
 function normalizedOrigin(raw) {
   const url = new URL(raw);
-  if (url.protocol !== "https:") {
-    throw new Error("OPENCLAW_DEMO_PUBLIC_ORIGIN must use https://");
+  const allowHttp = boolean("OPENCLAW_DEMO_ALLOW_HTTP", false);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("OPENCLAW_DEMO_PUBLIC_ORIGIN must use http:// or https://");
+  }
+  if (url.protocol === "http:" && !allowHttp) {
+    throw new Error(
+      "HTTP origin is disabled by default; set OPENCLAW_DEMO_ALLOW_HTTP=true for an explicitly insecure public demo",
+    );
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new Error("OPENCLAW_DEMO_PUBLIC_ORIGIN must be a bare HTTPS origin");

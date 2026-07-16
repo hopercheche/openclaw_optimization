@@ -46,6 +46,18 @@ The public origin must contain only the HTTPS scheme and host. Do not include a
 path, query, fragment, or `#token` value. The platform proxy must support
 WebSocket Upgrade and forward traffic to `OPENCLAW_DEMO_PORT`.
 
+If the platform only provides plain HTTP, explicitly opt into the insecure Demo
+mode at the top of `start.sh`:
+
+```bash
+OPENCLAW_DEMO_PUBLIC_ORIGIN="http://your-public-host:port"
+OPENCLAW_DEMO_ALLOW_HTTP="true"
+```
+
+HTTP is disabled by default. This override is appropriate only for a disposable
+public Demo because the shared Gateway token and browser traffic are not
+protected by TLS.
+
 The real model API key is resolved from the Gateway environment through an
 OpenClaw SecretRef. It is not written to the image or `openclaw.json`.
 

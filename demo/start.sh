@@ -9,6 +9,7 @@ PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 export OPENCLAW_DEMO_PUBLIC_ORIGIN="${OPENCLAW_DEMO_PUBLIC_ORIGIN:-https://replace-with-platform-url}"
 export OPENCLAW_DEMO_PORT="${OPENCLAW_DEMO_PORT:-18789}"
 export OPENCLAW_DEMO_GATEWAY_TOKEN="${OPENCLAW_DEMO_GATEWAY_TOKEN:-replace-with-demo-token}"
+export OPENCLAW_DEMO_ALLOW_HTTP="${OPENCLAW_DEMO_ALLOW_HTTP:-false}"
 
 export OPENCLAW_DEMO_MODEL_API_URL="${OPENCLAW_DEMO_MODEL_API_URL:-https://replace-with-provider/v1}"
 export OPENCLAW_DEMO_MODEL_API_KEY="${OPENCLAW_DEMO_MODEL_API_KEY:-replace-with-dedicated-demo-key}"
@@ -109,14 +110,20 @@ require_real_value OPENCLAW_DEMO_MID_MODEL
 require_real_value OPENCLAW_DEMO_LARGE_MODEL
 
 export OPENCLAW_DEMO_PUBLIC_ORIGIN
-OPENCLAW_DEMO_PUBLIC_ORIGIN="$(python3 - "$OPENCLAW_DEMO_PUBLIC_ORIGIN" <<'PY'
+OPENCLAW_DEMO_PUBLIC_ORIGIN="$(python3 - "$OPENCLAW_DEMO_PUBLIC_ORIGIN" "$OPENCLAW_DEMO_ALLOW_HTTP" <<'PY'
 import sys
 from urllib.parse import urlsplit
 
 raw = sys.argv[1]
+allow_http = sys.argv[2].strip().lower() in {"1", "true", "yes", "on"}
 parsed = urlsplit(raw)
-if parsed.scheme != "https" or not parsed.netloc:
-    raise SystemExit("OPENCLAW_DEMO_PUBLIC_ORIGIN must be an HTTPS origin")
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit("OPENCLAW_DEMO_PUBLIC_ORIGIN must be an HTTP or HTTPS origin")
+if parsed.scheme == "http" and not allow_http:
+    raise SystemExit(
+        "HTTP origin is disabled by default; set OPENCLAW_DEMO_ALLOW_HTTP=true "
+        "for an explicitly insecure public demo"
+    )
 if parsed.username or parsed.password or parsed.query or parsed.fragment:
     raise SystemExit("OPENCLAW_DEMO_PUBLIC_ORIGIN must not contain credentials, query, or fragment")
 if parsed.path not in ("", "/"):

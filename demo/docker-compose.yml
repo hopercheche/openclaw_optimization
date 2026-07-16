@@ -34,6 +34,7 @@ services:
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_DEMO_GATEWAY_TOKEN}
       OPENCLAW_DEMO_PUBLIC_ORIGIN: ${OPENCLAW_DEMO_PUBLIC_ORIGIN}
+      OPENCLAW_DEMO_ALLOW_HTTP: ${OPENCLAW_DEMO_ALLOW_HTTP:-false}
       OPENCLAW_DEMO_MODEL_API_URL: ${OPENCLAW_DEMO_MODEL_API_URL}
       OPENCLAW_DEMO_MODEL_API_KEY: ${OPENCLAW_DEMO_MODEL_API_KEY}
       OPENCLAW_DEMO_MODEL_API: ${OPENCLAW_DEMO_MODEL_API:-openai-responses}
@@ -62,6 +63,7 @@ services:
     volumes: &openclaw-demo-volumes
       - openclaw-demo-state:/home/node/.openclaw
       - openclaw-demo-secrets:/home/node/.config/openclaw
+      - ./init.mjs:/opt/openclaw-demo/init.mjs:ro
     entrypoint: ["node", "/opt/openclaw-demo/init.mjs"]
     restart: "no"
     security_opt:
