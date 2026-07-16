@@ -20,3 +20,9 @@ fi
 if [[ "$OPENCLAW_DEMO_PUBLIC_ORIGIN" != *"replace-with"* && "$OPENCLAW_DEMO_GATEWAY_TOKEN" != *"replace-with"* ]]; then
   printf '\nPublic Control UI: %s\n' "$(demo_public_url)"
 fi
+
+if docker container inspect "$OPENCLAW_DEMO_NGROK_CONTAINER" >/dev/null 2>&1; then
+  printf '\nngrok container: %s\n' "$OPENCLAW_DEMO_NGROK_CONTAINER"
+  curl -fsS "http://127.0.0.1:${OPENCLAW_DEMO_NGROK_API_PORT}/api/tunnels" 2>/dev/null || true
+  printf '\n'
+fi

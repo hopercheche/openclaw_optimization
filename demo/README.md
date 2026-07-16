@@ -79,6 +79,31 @@ The token is stored in the URL fragment, so browsers deliver it to the Control
 UI without sending it in the HTTP request path. Device pairing is disabled for
 this dedicated Demo Gateway.
 
+### One-Click ngrok Start
+
+Set the ngrok authtoken at the top of `start.sh`:
+
+```bash
+OPENCLAW_DEMO_NGROK_AUTHTOKEN="your-ngrok-authtoken"
+```
+
+Then run:
+
+```bash
+bash demo/start-ngrok.sh
+```
+
+The script runs the official `ngrok/ngrok` container, reads its HTTPS endpoint
+from the local ngrok API, configures that exact endpoint as OpenClaw's allowed
+Control UI origin, verifies that device authentication is disabled, and prints
+the complete `#token=` URL. No HTTP override is needed for ngrok.
+
+Stop both OpenClaw and ngrok while preserving OpenClaw volumes:
+
+```bash
+bash demo/stop-ngrok.sh
+```
+
 ## 4. Smoke And Operations
 
 Run a real model request and verify Router activity:
@@ -104,6 +129,21 @@ bash demo/reset.sh
 # Non-interactive destructive form:
 bash demo/reset.sh --yes
 ```
+
+## Port Already In Use
+
+If startup reports that the host port is already in use, inspect the owner:
+
+```bash
+docker ps --filter publish=18789 --format 'table {{.Names}}\t{{.Ports}}'
+sudo ss -ltnp 'sport = :18789'
+```
+
+Stop an obsolete container only after identifying it. If the existing service
+must remain running, change both `OPENCLAW_DEMO_PORT` and the port in the public
+forwarding URL, for example from `18789` to `18889`. After a failed partial
+startup, `bash demo/stop.sh` removes the Demo containers while preserving its
+named volumes.
 
 ## Security Boundary
 

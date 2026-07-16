@@ -46,6 +46,11 @@ export OPENCLAW_DEMO_PLANNER_TIMEOUT_MS="${OPENCLAW_DEMO_PLANNER_TIMEOUT_MS:-150
 export OPENCLAW_DEMO_PLANNER_MAX_PROMPT_CHARS="${OPENCLAW_DEMO_PLANNER_MAX_PROMPT_CHARS:-12000}"
 export OPENCLAW_DEMO_TOOL_PROFILE="${OPENCLAW_DEMO_TOOL_PROFILE:-minimal}"
 
+export OPENCLAW_DEMO_NGROK_AUTHTOKEN="${OPENCLAW_DEMO_NGROK_AUTHTOKEN:-replace-with-ngrok-authtoken}"
+export OPENCLAW_DEMO_NGROK_IMAGE="${OPENCLAW_DEMO_NGROK_IMAGE:-ngrok/ngrok:latest}"
+export OPENCLAW_DEMO_NGROK_CONTAINER="${OPENCLAW_DEMO_NGROK_CONTAINER:-openclaw-demo-ngrok}"
+export OPENCLAW_DEMO_NGROK_API_PORT="${OPENCLAW_DEMO_NGROK_API_PORT:-4040}"
+
 demo_compose() {
   docker compose \
     -f "$SCRIPT_DIR/docker-compose.yml" \
@@ -151,6 +156,32 @@ fi
 
 demo_compose config --quiet
 
+running_gateway_id="$(demo_compose ps -q openclaw-gateway 2>/dev/null || true)"
+if [[ -z "$running_gateway_id" ]]; then
+  if ! python3 - "$OPENCLAW_DEMO_PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("0.0.0.0", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+  then
+    echo "Host port $OPENCLAW_DEMO_PORT is already in use." >&2
+    docker ps \
+      --filter "publish=$OPENCLAW_DEMO_PORT" \
+      --format 'Docker owner: {{.Names}}  {{.Ports}}' >&2 || true
+    echo "Inspect other listeners with: sudo ss -ltnp 'sport = :$OPENCLAW_DEMO_PORT'" >&2
+    echo "Stop the existing owner or choose another OPENCLAW_DEMO_PORT and matching public forwarding URL." >&2
+    exit 1
+  fi
+fi
+
 show_failure_logs() {
   local status="$?"
   if ((status != 0)); then
@@ -184,6 +215,13 @@ context_slot="$(demo_compose run --rm --no-deps openclaw-cli config get plugins.
 printf '%s\n' "$context_slot"
 if [[ "$context_slot" != *"context-index"* ]]; then
   echo "Context Index is not configured as the context engine." >&2
+  exit 1
+fi
+
+device_auth="$(demo_compose run --rm --no-deps openclaw-cli config get gateway.controlUi.dangerouslyDisableDeviceAuth 2>&1)"
+printf '%s\n' "$device_auth"
+if [[ "$device_auth" != *"true"* ]]; then
+  echo "Control UI device authentication bypass is not enabled." >&2
   exit 1
 fi
 

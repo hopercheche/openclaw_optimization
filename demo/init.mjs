@@ -147,6 +147,7 @@ const managedConfig = {
       allowedOrigins: [publicOrigin],
       allowInsecureAuth: false,
       dangerouslyDisableDeviceAuth: true,
+      dangerouslyAllowHostHeaderOriginFallback: false,
     },
     terminal: {
       enabled: false,
