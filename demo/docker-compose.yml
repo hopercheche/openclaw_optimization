@@ -1,0 +1,126 @@
+services:
+  openclaw-router-api:
+    image: ${OPENCLAW_ROUTER_API_IMAGE:-openclaw-router-api:2026.6.11}
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      EMBEDDING_MODE: ${OPENCLAW_ROUTER_EMBEDDING_MODE:-hash}
+      ROUTER_API_KEY: ${OPENCLAW_ROUTER_API_KEY:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  openclaw-demo-init:
+    image: ${OPENCLAW_DEMO_IMAGE:-openclaw-demo:2026.6.11-three-plugins}
+    environment: &openclaw-demo-environment
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_DEMO_GATEWAY_TOKEN}
+      OPENCLAW_DEMO_PUBLIC_ORIGIN: ${OPENCLAW_DEMO_PUBLIC_ORIGIN}
+      OPENCLAW_DEMO_MODEL_API_URL: ${OPENCLAW_DEMO_MODEL_API_URL}
+      OPENCLAW_DEMO_MODEL_API_KEY: ${OPENCLAW_DEMO_MODEL_API_KEY}
+      OPENCLAW_DEMO_MODEL_API: ${OPENCLAW_DEMO_MODEL_API:-openai-responses}
+      OPENCLAW_DEMO_SMALL_MODEL: ${OPENCLAW_DEMO_SMALL_MODEL}
+      OPENCLAW_DEMO_MID_MODEL: ${OPENCLAW_DEMO_MID_MODEL}
+      OPENCLAW_DEMO_LARGE_MODEL: ${OPENCLAW_DEMO_LARGE_MODEL}
+      OPENCLAW_DEMO_CONTEXT_WINDOW: ${OPENCLAW_DEMO_CONTEXT_WINDOW:-131072}
+      OPENCLAW_DEMO_MAX_TOKENS: ${OPENCLAW_DEMO_MAX_TOKENS:-8192}
+      OPENCLAW_DEMO_AGENT_TIMEOUT: ${OPENCLAW_DEMO_AGENT_TIMEOUT:-600}
+      OPENCLAW_DEMO_TOOL_PROFILE: ${OPENCLAW_DEMO_TOOL_PROFILE:-minimal}
+      OPENCLAW_DEMO_ROUTER_CONFIDENCE_THRESHOLD: ${OPENCLAW_DEMO_ROUTER_CONFIDENCE_THRESHOLD:-0.5}
+      OPENCLAW_DEMO_ROUTER_TIMEOUT_MS: ${OPENCLAW_DEMO_ROUTER_TIMEOUT_MS:-5000}
+      OPENCLAW_DEMO_ROUTER_STRICT: ${OPENCLAW_DEMO_ROUTER_STRICT:-true}
+      OPENCLAW_DEMO_CONTEXT_INDEX_MODE: ${OPENCLAW_DEMO_CONTEXT_INDEX_MODE:-progressive}
+      OPENCLAW_DEMO_CONTEXT_INDEX_PROJECT_ID: ${OPENCLAW_DEMO_CONTEXT_INDEX_PROJECT_ID:-public-demo}
+      OPENCLAW_DEMO_CONTEXT_INDEX_RECENT_MESSAGE_LIMIT: ${OPENCLAW_DEMO_CONTEXT_INDEX_RECENT_MESSAGE_LIMIT:-8}
+      OPENCLAW_DEMO_CONTEXT_INDEX_MAX_SNIPPET_CHARS: ${OPENCLAW_DEMO_CONTEXT_INDEX_MAX_SNIPPET_CHARS:-900}
+      OPENCLAW_DEMO_CONTEXT_INDEX_TOP_K: ${OPENCLAW_DEMO_CONTEXT_INDEX_TOP_K:-8}
+      OPENCLAW_DEMO_CONTEXT_INDEX_CANDIDATE_K: ${OPENCLAW_DEMO_CONTEXT_INDEX_CANDIDATE_K:-80}
+      OPENCLAW_DEMO_CONTEXT_INDEX_HALF_LIFE_DAYS: ${OPENCLAW_DEMO_CONTEXT_INDEX_HALF_LIFE_DAYS:-30}
+      OPENCLAW_DEMO_PLANNER_TIMEOUT_MS: ${OPENCLAW_DEMO_PLANNER_TIMEOUT_MS:-1500}
+      OPENCLAW_DEMO_PLANNER_MAX_PROMPT_CHARS: ${OPENCLAW_DEMO_PLANNER_MAX_PROMPT_CHARS:-12000}
+      OPENCLAW_ROUTER_API_KEY: ${OPENCLAW_ROUTER_API_KEY:-}
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_DEMO_TZ:-Asia/Shanghai}
+    volumes: &openclaw-demo-volumes
+      - openclaw-demo-state:/home/node/.openclaw
+      - openclaw-demo-secrets:/home/node/.config/openclaw
+    entrypoint: ["node", "/opt/openclaw-demo/init.mjs"]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  openclaw-gateway:
+    image: ${OPENCLAW_DEMO_IMAGE:-openclaw-demo:2026.6.11-three-plugins}
+    environment: *openclaw-demo-environment
+    volumes: *openclaw-demo-volumes
+    depends_on:
+      openclaw-demo-init:
+        condition: service_completed_successfully
+      openclaw-router-api:
+        condition: service_healthy
+    ports:
+      - "${OPENCLAW_DEMO_PORT:-18789}:18789"
+    command:
+      [
+        "openclaw",
+        "gateway",
+        "--allow-unconfigured",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  openclaw-cli:
+    profiles: ["tools"]
+    image: ${OPENCLAW_DEMO_IMAGE:-openclaw-demo:2026.6.11-three-plugins}
+    network_mode: "service:openclaw-gateway"
+    environment: *openclaw-demo-environment
+    volumes: *openclaw-demo-volumes
+    entrypoint: ["openclaw"]
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  openclaw-demo-state:
+    name: ${OPENCLAW_DEMO_STATE_VOLUME:-openclaw-demo-state}
+  openclaw-demo-secrets:
+    name: ${OPENCLAW_DEMO_SECRET_VOLUME:-openclaw-demo-secrets}
